@@ -19,8 +19,15 @@ y ETFs (`SPY`).
 ```powershell
 python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
-copy .env.example .env      # y rellena tus claves de Telegram
 .venv\Scripts\python -m uvicorn app.main:app --port 8000
+```
+
+Crea un archivo `.env` en la raíz con tus claves (ver tabla de variables más abajo):
+
+```
+TELEGRAM_BOT_TOKEN=123456:ABC...
+TELEGRAM_CHAT_ID=...
+DATABASE_URL=postgresql://...   # opcional; sin esto usa SQLite local
 ```
 
 Abre http://localhost:8000
@@ -37,9 +44,7 @@ Abre http://localhost:8000
 
 1. Crea el proyecto en [neon.tech](https://neon.tech) y copia el *connection string*.
 2. Ponlo en el `.env`: `DATABASE_URL=postgresql://usuario:contraseña@ep-xxx.neon.tech/neondb?sslmode=require`
-3. (Opcional) Copia tus datos actuales de SQLite:
-   `.venv\Scripts\python scripts\copy_sqlite_to_db.py`
-4. Reinicia la app: las tablas se crean solas al arrancar.
+3. Reinicia la app: las tablas se crean solas al arrancar.
 
 ## Desplegar en Render
 
