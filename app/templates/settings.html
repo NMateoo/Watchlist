@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Ajustes — Watchlist{% endblock %}
+{% block content %}
+<a href="/" class="back">← Volver</a>
+<h1>⚙️ Ajustes</h1>
+
+<section class="card">
+  <h2>Telegram</h2>
+  {% if telegram_ok %}
+    <p><span class="badge ok">Configurado ✓</span></p>
+    <form method="post" action="/settings/test-telegram">
+      <button type="submit">Enviar mensaje de prueba</button>
+    </form>
+  {% else %}
+    <p><span class="badge warn">Sin configurar</span></p>
+    <ol class="steps">
+      <li>Abre Telegram y habla con <b>@BotFather</b> → <code>/newbot</code>. Te dará un <b>token</b>.</li>
+      <li>Pon el token en el archivo <code>.env</code>: <code>TELEGRAM_BOT_TOKEN=123456:ABC…</code></li>
+      <li>Abre un chat con tu bot y mándale cualquier mensaje (ej: "hola").</li>
+      <li>Recarga esta página: te mostraremos tu <b>chat_id</b> para completar el <code>.env</code>.</li>
+      <li>Añade <code>TELEGRAM_CHAT_ID=…</code> al <code>.env</code> y reinicia la app.</li>
+    </ol>
+    {% if has_token and chat_id_hint %}
+      <div class="flash ok">Detectado tu chat: añade <code>TELEGRAM_CHAT_ID={{ chat_id_hint }}</code> al .env y reinicia.</div>
+    {% elif has_token %}
+      <div class="flash warn">Token detectado, pero aún no veo mensajes. Escríbele algo a tu bot y recarga.</div>
+    {% endif %}
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Cambios bruscos</h2>
+  <p class="hint">Te avisamos si un valor sube o baja más de este porcentaje en el día (una vez al día por valor).</p>
+  <form method="post" action="/settings/move-threshold" class="alert-form">
+    <input type="text" name="move_threshold" value="{{ move_threshold }}"> %
+    <button type="submit">Guardar</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Programación</h2>
+  <ul class="plain">
+    <li>Comprobación de alertas: cada <b>{{ check_interval }} min</b></li>
+    <li>Resumen diario: a las <b>{{ summary_time }}</b> ({{ timezone }})</li>
+  </ul>
+  <p class="hint">Se cambia con las variables <code>CHECK_INTERVAL_MINUTES</code>, <code>DAILY_SUMMARY_TIME</code> y <code>TIMEZONE</code>.</p>
+</section>
+{% endblock %}

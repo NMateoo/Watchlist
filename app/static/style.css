@@ -1,0 +1,154 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0f1420;
+  --surface: #171e2e;
+  --surface-2: #1f2840;
+  --border: #2a3550;
+  --text: #e8ecf4;
+  --muted: #8b93a7;
+  --accent: #4f8cff;
+  --up: #22c55e;
+  --down: #ef4444;
+  --warn: #f59e0b;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+nav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+nav a { color: var(--text); text-decoration: none; }
+nav .brand { font-weight: 700; font-size: 18px; }
+.nav-right { display: flex; gap: 16px; align-items: center; }
+
+main { max-width: 1000px; margin: 0 auto; padding: 24px 16px 64px; }
+
+h1 { font-size: 26px; margin-bottom: 12px; }
+h1 .name { font-size: 16px; font-weight: 400; color: var(--muted); }
+h2 { font-size: 17px; margin-bottom: 12px; }
+
+.back { color: var(--muted); text-decoration: none; display: inline-block; margin-bottom: 16px; }
+.back:hover { color: var(--text); }
+
+/* ---- flashes y badges ---- */
+.flash { padding: 10px 14px; border-radius: 8px; margin-bottom: 16px; font-size: 14px; }
+.flash.ok { background: rgba(34,197,94,.12); border: 1px solid rgba(34,197,94,.4); }
+.flash.err { background: rgba(239,68,68,.12); border: 1px solid rgba(239,68,68,.4); }
+.flash.warn { background: rgba(245,158,11,.12); border: 1px solid rgba(245,158,11,.4); }
+.flash a { color: var(--accent); }
+
+.badge {
+  display: inline-block; padding: 2px 9px; border-radius: 99px;
+  font-size: 12.5px; font-weight: 600; text-decoration: none;
+}
+.badge.ok { background: rgba(34,197,94,.15); color: var(--up); }
+.badge.warn { background: rgba(245,158,11,.15); color: var(--warn); }
+.badge.muted { background: var(--surface-2); color: var(--muted); font-weight: 400; }
+.badge.up { background: rgba(34,197,94,.15); color: var(--up); }
+.badge.down { background: rgba(239,68,68,.15); color: var(--down); }
+
+/* ---- formularios ---- */
+input[type="text"], textarea, select {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 9px 12px;
+  font-size: 14px;
+  font-family: inherit;
+  width: 100%;
+}
+input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+label { display: block; margin-bottom: 12px; font-size: 13.5px; color: var(--muted); }
+label input, label textarea { margin-top: 4px; }
+
+button {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 9px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+button:hover { filter: brightness(1.12); }
+button.icon {
+  background: transparent; color: var(--muted); padding: 4px 8px; font-size: 14px;
+}
+button.icon:hover { color: var(--down); }
+button.small { padding: 4px 10px; font-size: 12.5px; background: var(--surface-2); color: var(--text); }
+
+/* ---- barra añadir ---- */
+.add-bar { margin-bottom: 24px; }
+.add-bar form { display: flex; gap: 8px; }
+.add-bar input { flex: 1; max-width: 480px; }
+.hint { color: var(--muted); font-size: 13px; margin-top: 6px; }
+code { background: var(--surface-2); padding: 1px 6px; border-radius: 5px; font-size: 12.5px; }
+
+/* ---- tabla watchlist ---- */
+.watchlist { width: 100%; border-collapse: collapse; background: var(--surface); border-radius: 12px; overflow: hidden; }
+.watchlist th, .watchlist td { padding: 11px 14px; text-align: left; }
+.watchlist th { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); border-bottom: 1px solid var(--border); }
+.watchlist tbody tr { border-bottom: 1px solid var(--border); }
+.watchlist tbody tr:last-child { border-bottom: none; }
+.watchlist tbody tr:hover { background: var(--surface-2); }
+.watchlist .num { text-align: right; font-variant-numeric: tabular-nums; }
+.watchlist .name { color: var(--muted); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.watchlist .range { font-size: 13px; color: var(--muted); }
+.ticker { color: var(--accent); font-weight: 700; text-decoration: none; }
+.ticker:hover { text-decoration: underline; }
+.up { color: var(--up); }
+.down { color: var(--down); }
+.muted { color: var(--muted); }
+
+.empty { text-align: center; padding: 64px 0; color: var(--muted); }
+
+/* ---- ficha valor ---- */
+.stock-head { margin-bottom: 20px; }
+.price-line { display: flex; align-items: center; gap: 12px; margin: 6px 0; }
+.big-price { font-size: 32px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 20px;
+  margin-bottom: 20px;
+}
+.chart-wrap { height: 320px; }
+.chart-controls { display: flex; gap: 6px; margin-bottom: 12px; }
+.range-btn { background: var(--surface-2); color: var(--muted); padding: 5px 12px; font-size: 13px; }
+.range-btn.active { background: var(--accent); color: #fff; }
+
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media (max-width: 760px) { .two-col { grid-template-columns: 1fr; } }
+
+.alert-form { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; }
+.alert-form select { width: auto; }
+.alert-form input { width: 110px; }
+
+.alert-list { list-style: none; }
+.alert-list li {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 14px;
+}
+.alert-list li:last-child { border-bottom: none; }
+.alert-actions { display: flex; gap: 6px; align-items: center; }
+
+.steps { margin: 10px 0 10px 20px; font-size: 14px; }
+.steps li { margin-bottom: 6px; }
+ul.plain { list-style: none; font-size: 14px; }
+ul.plain li { margin-bottom: 4px; }

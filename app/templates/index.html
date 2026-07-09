@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="add-bar">
+  <form method="post" action="/stocks/add">
+    <input type="text" name="ticker" placeholder="Añadir ticker: AAPL, SAN.MC, BTC-USD…"
+           autocomplete="off" autofocus required>
+    <button type="submit">Añadir</button>
+  </form>
+  <p class="hint">Sufijos de Yahoo Finance: <code>.MC</code> Madrid · <code>.DE</code> Alemania ·
+     <code>.PA</code> París · <code>-USD</code> cripto · sin sufijo, EE.UU.</p>
+</section>
+
+{% if stocks %}
+<table class="watchlist">
+  <thead>
+    <tr>
+      <th>Ticker</th>
+      <th>Nombre</th>
+      <th class="num">Precio</th>
+      <th class="num">Hoy</th>
+      <th class="num">Rango 52 sem.</th>
+      <th class="num">Objetivo</th>
+      <th>Alertas</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for s in stocks %}
+    {% set q = quotes.get(s.ticker) %}
+    <tr>
+      <td><a class="ticker" href="/stocks/{{ s.ticker }}">{{ s.ticker }}</a></td>
+      <td class="name">{{ s.name }}</td>
+      {% if q %}
+        <td class="num">{{ q.price | price(q.currency) }}</td>
+        <td class="num {{ 'up' if q.change_pct >= 0 else 'down' }}">{{ q.change_pct | pct }}</td>
+        <td class="num range">
+          {% if q.year_low and q.year_high %}
+            {{ q.year_low | price(q.currency) }} – {{ q.year_high | price(q.currency) }}
+          {% else %}—{% endif %}
+        </td>
+      {% else %}
+        <td class="num" colspan="3">sin datos</td>
+      {% endif %}
+      <td class="num">{{ s.target_price | price(s.currency) if s.target_price else '—' }}</td>
+      <td>
+        {% set active = s.alerts | selectattr('active') | list | length %}
+        {% if active %}<span class="badge ok">{{ active }} activa{{ 's' if active > 1 }}</span>
+        {% else %}<span class="muted">—</span>{% endif %}
+      </td>
+      <td>
+        <form method="post" action="/stocks/{{ s.id }}/delete"
+              onsubmit="return confirm('¿Quitar {{ s.ticker }} de la watchlist?')">
+          <button class="icon" title="Eliminar">✕</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty">
+  <p>Tu watchlist está vacía. Añade tu primer valor arriba 👆</p>
+  <p class="hint">Prueba con <code>AAPL</code>, <code>SAN.MC</code> o <code>BTC-USD</code>.</p>
+</div>
+{% endif %}
+{% endblock %}

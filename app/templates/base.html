@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Watchlist{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
+</head>
+<body>
+  <nav>
+    <a href="/" class="brand">📈 Watchlist</a>
+    <div class="nav-right">
+      <a href="/settings">⚙️ Ajustes</a>
+      {% if telegram_ok %}
+        <span class="badge ok" title="Telegram configurado">Telegram ✓</span>
+      {% else %}
+        <a href="/settings" class="badge warn" title="Telegram sin configurar">Telegram ✗</a>
+      {% endif %}
+    </div>
+  </nav>
+  <main>
+    {% if request.query_params.get('msg') %}
+      <div class="flash ok">{{ request.query_params.get('msg') }}</div>
+    {% endif %}
+    {% if request.query_params.get('err') %}
+      <div class="flash err">{{ request.query_params.get('err') }}</div>
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

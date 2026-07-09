@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: watchlist
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.13.4"
+      - key: TIMEZONE
+        value: Europe/Madrid
+      - key: DAILY_SUMMARY_TIME
+        value: "22:10"
+      - key: CHECK_INTERVAL_MINUTES
+        value: "10"
+      # Estas tres se rellenan a mano en el dashboard de Render:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: DATABASE_URL
+        sync: false

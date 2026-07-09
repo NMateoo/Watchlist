@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block title %}{{ stock.ticker }} — Watchlist{% endblock %}
+{% block content %}
+<a href="/" class="back">← Volver</a>
+
+<header class="stock-head">
+  <div>
+    <h1>{{ stock.ticker }} <span class="name">{{ stock.name }}</span></h1>
+    {% if quote %}
+      <div class="price-line">
+        <span class="big-price">{{ quote.price | price(quote.currency) }}</span>
+        <span class="badge {{ 'up' if quote.change_pct >= 0 else 'down' }}">{{ quote.change_pct | pct }} hoy</span>
+      </div>
+      {% if quote.year_low and quote.year_high %}
+      <p class="hint">Rango 52 semanas: {{ quote.year_low | price(quote.currency) }} – {{ quote.year_high | price(quote.currency) }}</p>
+      {% endif %}
+    {% else %}
+      <p class="hint">Sin datos de cotización ahora mismo.</p>
+    {% endif %}
+  </div>
+</header>
+
+<section class="card">
+  <div class="chart-controls">
+    {% for p, label in [('1mo','1M'), ('3mo','3M'), ('6mo','6M'), ('1y','1A'), ('5y','5A'), ('max','Máx')] %}
+      <button class="range-btn {{ 'active' if p == '6mo' }}" data-period="{{ p }}">{{ label }}</button>
+    {% endfor %}
+  </div>
+  <div class="chart-wrap"><canvas id="chart"></canvas></div>
+</section>
+
+<div class="two-col">
+  <section class="card">
+    <h2>📝 Mis notas</h2>
+    <form method="post" action="/stocks/{{ stock.id }}/notes">
+      <label>Precio objetivo ({{ stock.currency }})
+        <input type="text" name="target_price" value="{{ stock.target_price if stock.target_price is not none }}"
+               placeholder="ej: 150.00">
+      </label>
+      <label>Notas
+        <textarea name="notes" rows="6"
+          placeholder="Por qué la sigo, tesis de inversión, niveles clave…">{{ stock.notes }}</textarea>
+      </label>
+      <button type="submit">Guardar</button>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>🔔 Alertas de precio</h2>
+    {% if not telegram_ok %}
+      <div class="flash warn">Telegram no está configurado: las alertas no se enviarán.
+        <a href="/settings">Configurar →</a></div>
+    {% endif %}
+    <form method="post" action="/alerts/add" class="alert-form">
+      <input type="hidden" name="stock_id" value="{{ stock.id }}">
+      <select name="kind">
+        <option value="below">Si baja de</option>
+        <option value="above">Si sube de</option>
+      </select>
+      <input type="text" name="threshold" placeholder="precio" required>
+      <button type="submit">Crear</button>
+    </form>
+    {% if stock.alerts %}
+    <ul class="alert-list">
+      {% for a in stock.alerts | sort(attribute='created_at', reverse=true) %}
+      <li>
+        <span>
+          {{ '⬆️ Sube de' if a.kind == 'above' else '⬇️ Baja de' }}
+          <b>{{ a.threshold | price(stock.currency) }}</b>
+          {% if not a.active %}
+            <span class="badge muted">disparada {{ a.triggered_at.strftime('%d/%m %H:%M') if a.triggered_at }}</span>
+          {% endif %}
+        </span>
+        <span class="alert-actions">
+          {% if not a.active %}
+          <form method="post" action="/alerts/{{ a.id }}/rearm"><button class="small">Reactivar</button></form>
+          {% endif %}
+          <form method="post" action="/alerts/{{ a.id }}/delete"><button class="icon" title="Eliminar">✕</button></form>
+        </span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted">Sin alertas todavía.</p>
+    {% endif %}
+  </section>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script>
+  const ticker = {{ stock.ticker | tojson }};
+  let chart = null;
+
+  async function loadChart(period) {
+    const res = await fetch(`/api/history/${ticker}?period=${period}`);
+    const data = await res.json();
+    const up = data.length > 1 && data[data.length - 1].close >= data[0].close;
+    const color = up ? '#22c55e' : '#ef4444';
+    if (chart) chart.destroy();
+    chart = new Chart(document.getElementById('chart'), {
+      type: 'line',
+      data: {
+        labels: data.map(d => d.date),
+        datasets: [{
+          data: data.map(d => d.close),
+          borderColor: color,
+          backgroundColor: color + '22',
+          fill: true,
+          pointRadius: 0,
+          borderWidth: 2,
+          tension: 0.1,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        interaction: { intersect: false, mode: 'index' },
+        scales: {
+          x: { ticks: { maxTicksLimit: 8, color: '#8b93a7' }, grid: { display: false } },
+          y: { ticks: { color: '#8b93a7' }, grid: { color: 'rgba(139,147,167,.15)' } },
+        }
+      }
+    });
+  }
+
+  document.querySelectorAll('.range-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      loadChart(btn.dataset.period);
+    });
+  });
+  loadChart('6mo');
+</script>
+{% endblock %}
