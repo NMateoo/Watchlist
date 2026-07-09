@@ -1,16 +1,33 @@
 {% extends "base.html" %}
 {% block content %}
+<div class="tabs">
+  {% for wl in watchlists %}
+    <a class="tab {{ 'active' if wl.id == active_list.id }}" href="/?list={{ wl.id }}">{{ wl.name }}</a>
+  {% endfor %}
+  <button class="tab new" id="new-list-btn" title="Crear otra lista">＋ Nueva lista</button>
+  {% if watchlists | length > 1 %}
+  <form method="post" action="/lists/{{ active_list.id }}/delete" class="tab-delete"
+        onsubmit="return confirm('¿Eliminar la lista «{{ active_list.name }}» y todo su contenido?')">
+    <button class="icon" title="Eliminar la lista actual">🗑</button>
+  </form>
+  {% endif %}
+</div>
+<form method="post" action="/lists/add" id="new-list-form" hidden>
+  <input type="hidden" name="name">
+</form>
+
 <section class="add-bar">
   <form method="post" action="/stocks/add" autocomplete="off">
+    <input type="hidden" name="watchlist_id" value="{{ active_list.id }}">
     <div class="search-wrap">
       <input type="text" name="ticker" id="ticker-input"
-             placeholder="Buscar: apple, santander, bitcoin…" autofocus required>
+             placeholder="Buscar: apple, santander, bitcoin, gold…" autofocus required>
       <ul id="suggestions" class="suggestions" hidden></ul>
     </div>
-    <button type="submit">Añadir</button>
+    <button type="submit">Añadir a {{ active_list.name }}</button>
   </form>
-  <p class="hint">Escribe el nombre o el ticker y elige una sugerencia.
-     Sufijos de Yahoo: <code>.MC</code> Madrid · <code>.DE</code> Alemania · <code>-USD</code> cripto.</p>
+  <p class="hint">Acciones, ETFs, cripto y materias primas (en inglés: <code>gold</code>, <code>crude oil</code>…
+     o el símbolo: <code>GC=F</code> oro, <code>CL=F</code> petróleo).</p>
 </section>
 
 {% if stocks %}
@@ -19,6 +36,7 @@
     <tr>
       <th>Ticker</th>
       <th>Nombre</th>
+      <th>Mercado</th>
       <th class="num">Precio</th>
       <th class="num">Hoy</th>
       <th class="num">Rango 52 sem.</th>
@@ -31,8 +49,9 @@
     {% for s in stocks %}
     {% set q = quotes.get(s.ticker) %}
     <tr data-ticker="{{ s.ticker }}">
-      <td><a class="ticker" href="/stocks/{{ s.ticker }}">{{ s.ticker }}</a></td>
+      <td><a class="ticker" href="/stocks/{{ s.id }}">{{ s.ticker }}</a></td>
       <td class="name">{{ s.name }}</td>
+      <td class="c-market" data-state="{{ q.market_state if q else 'unknown' }}"></td>
       <td class="num c-price">{{ q.price | price(q.currency) if q else '—' }}</td>
       <td class="num c-change {{ ('up' if q.change_pct >= 0 else 'down') if q }}">
         {{ q.change_pct | pct if q else '—' }}</td>
@@ -48,10 +67,8 @@
         {% else %}<span class="muted">—</span>{% endif %}
       </td>
       <td>
-        <form method="post" action="/stocks/{{ s.id }}/delete"
-              onsubmit="return confirm('¿Quitar {{ s.ticker }} de la watchlist?')">
-          <button class="icon" title="Eliminar">✕</button>
-        </form>
+        <button class="icon delete-stock" data-id="{{ s.id }}" data-ticker="{{ s.ticker }}"
+                title="Eliminar">✕</button>
       </td>
     </tr>
     {% endfor %}
@@ -61,16 +78,27 @@
   (<a href="/settings">cambiar</a>) · <span id="last-update"></span></p>
 {% else %}
 <div class="empty">
-  <p>Tu watchlist está vacía. Busca tu primer valor arriba 👆</p>
-  <p class="hint">Prueba a escribir <code>apple</code>, <code>santander</code> o <code>bitcoin</code>.</p>
+  <p>La lista «{{ active_list.name }}» está vacía. Busca tu primer valor arriba 👆</p>
+  <p class="hint">Prueba a escribir <code>apple</code>, <code>santander</code>, <code>bitcoin</code> o <code>gold</code>.</p>
 </div>
 {% endif %}
+{% endblock %}
 
-<script src="/static/app.js"></script>
+{% block scripts %}
 <script>
   setupSearch(document.getElementById('ticker-input'), document.getElementById('suggestions'));
+  setupStockDeletion();
+  renderMarketBadges();
   {% if stocks %}
   startLivePrices({{ refresh_seconds }});
   {% endif %}
+
+  document.getElementById('new-list-btn').addEventListener('click', () => {
+    const name = prompt('Nombre de la nueva lista:');
+    if (!name || !name.trim()) return;
+    const form = document.getElementById('new-list-form');
+    form.elements['name'].value = name.trim();
+    form.submit();
+  });
 </script>
 {% endblock %}

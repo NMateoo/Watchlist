@@ -42,8 +42,35 @@ h2 { font-size: 17px; margin-bottom: 12px; }
 .back { color: var(--muted); text-decoration: none; display: inline-block; margin-bottom: 16px; }
 .back:hover { color: var(--text); }
 
+/* ---- pestañas de listas ---- */
+.tabs { display: flex; gap: 6px; align-items: center; margin-bottom: 18px; flex-wrap: wrap; }
+.tab {
+  padding: 7px 16px;
+  border-radius: 99px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.tab:hover { color: var(--text); }
+.tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.tab.new { background: transparent; border-style: dashed; }
+.tab-delete { margin-left: 2px; }
+
+/* ---- estado del mercado ---- */
+.market-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); white-space: nowrap; }
+.market-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.market-dot.m-open { background: var(--up); box-shadow: 0 0 6px var(--up); }
+.market-dot.m-pre { background: var(--warn); }
+.market-dot.m-post { background: #a78bfa; }
+.market-dot.m-closed { background: var(--muted); }
+
 /* ---- flashes y badges ---- */
-.flash { padding: 10px 14px; border-radius: 8px; margin-bottom: 16px; font-size: 14px; }
+.flash { padding: 10px 14px; border-radius: 8px; margin-bottom: 16px; font-size: 14px; transition: opacity .5s; }
+.flash.fade { opacity: 0; }
 .flash.ok { background: rgba(34,197,94,.12); border: 1px solid rgba(34,197,94,.4); }
 .flash.err { background: rgba(239,68,68,.12); border: 1px solid rgba(239,68,68,.4); }
 .flash.warn { background: rgba(245,158,11,.12); border: 1px solid rgba(245,158,11,.4); }

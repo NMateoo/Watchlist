@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ stock.ticker }} — Watchlist{% endblock %}
 {% block content %}
-<a href="/" class="back">← Volver</a>
+<a href="/?list={{ stock.watchlist_id }}" class="back">← Volver a {{ stock.watchlist.name }}</a>
 
 <header class="stock-head">
   <div>
@@ -10,6 +10,7 @@
       <div class="price-line">
         <span class="big-price" id="big-price">{{ quote.price | price(quote.currency) }}</span>
         <span class="badge {{ 'up' if quote.change_pct >= 0 else 'down' }}" id="big-change">{{ quote.change_pct | pct }} hoy</span>
+        <span id="market-state" data-state="{{ quote.market_state }}"></span>
       </div>
       {% if quote.year_low and quote.year_high %}
       <p class="hint">Rango 52 semanas: {{ quote.year_low | price(quote.currency) }} – {{ quote.year_high | price(quote.currency) }}</p>
@@ -65,8 +66,10 @@
   </section>
 </div>
 
+{% endblock %}
+
+{% block scripts %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-<script src="/static/app.js"></script>
 <script>
   const ticker = {{ stock.ticker | tojson }};
   const stockId = {{ stock.id }};
@@ -186,7 +189,9 @@
 
   renderAlerts({{ alerts_json | tojson }});
 
-  // ---------------- precio en vivo ----------------
+  // ---------------- precio en vivo y estado del mercado ----------------
+  const marketEl = document.getElementById('market-state');
+  if (marketEl) setMarketBadge(marketEl, marketEl.dataset.state);
   startLiveQuote(ticker, {{ refresh_seconds }});
 </script>
 {% endblock %}

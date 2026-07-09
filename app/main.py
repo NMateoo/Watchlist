@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Form, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -18,6 +18,7 @@ from app.database import (
     Alert,
     SessionLocal,
     Stock,
+    Watchlist,
     get_move_threshold,
     get_refresh_seconds,
     init_db,
@@ -56,9 +57,18 @@ def redirect(url: str, msg: str = "", err: str = "") -> RedirectResponse:
 
 
 @app.get("/")
-def index(request: Request):
+def index(request: Request, list_id: int | None = Query(None, alias="list")):
     with SessionLocal() as session:
-        stocks = session.scalars(select(Stock).order_by(Stock.ticker)).all()
+        watchlists = session.scalars(select(Watchlist).order_by(Watchlist.id)).all()
+        if not watchlists:
+            default = Watchlist(name="Mi lista")
+            session.add(default)
+            session.commit()
+            watchlists = [default]
+        active = next((w for w in watchlists if w.id == list_id), watchlists[0])
+        stocks = session.scalars(
+            select(Stock).where(Stock.watchlist_id == active.id).order_by(Stock.ticker)
+        ).all()
         _ = [s.alerts for s in stocks]  # cargar relación antes de cerrar sesión
         refresh_seconds = get_refresh_seconds(session)
     quotes = prices.get_quotes([s.ticker for s in stocks])
@@ -68,6 +78,8 @@ def index(request: Request):
         {
             "stocks": stocks,
             "quotes": quotes,
+            "watchlists": watchlists,
+            "active_list": active,
             "telegram_ok": telegram.is_configured(),
             "refresh_seconds": refresh_seconds,
         },
@@ -75,40 +87,74 @@ def index(request: Request):
 
 
 @app.post("/stocks/add")
-def add_stock(ticker: str = Form(...)):
+def add_stock(ticker: str = Form(...), watchlist_id: int = Form(...)):
     ticker = ticker.strip().upper()
+    home = f"/?list={watchlist_id}"
     if not ticker:
-        return redirect("/", err="Escribe un ticker.")
+        return redirect(home, err="Escribe un ticker.")
     with SessionLocal() as session:
-        exists = session.scalar(select(Stock).where(Stock.ticker == ticker))
+        if not session.get(Watchlist, watchlist_id):
+            return redirect("/", err="Esa lista ya no existe.")
+        exists = session.scalar(
+            select(Stock).where(Stock.ticker == ticker, Stock.watchlist_id == watchlist_id)
+        )
         if exists:
-            return redirect("/", err=f"{ticker} ya está en tu watchlist.")
+            return redirect(home, err=f"{ticker} ya está en esta lista.")
         quote_data = prices.get_quote(ticker)
         if not quote_data:
             return redirect(
-                "/",
+                home,
                 err=f"No encuentro '{ticker}' en Yahoo Finance. "
-                "Recuerda los sufijos: SAN.MC (Madrid), BTC-USD (cripto).",
+                "Recuerda los sufijos: SAN.MC (Madrid), BTC-USD (cripto), GC=F (futuros).",
             )
         session.add(
             Stock(
                 ticker=ticker,
+                watchlist_id=watchlist_id,
                 name=prices.lookup_name(ticker),
                 currency=quote_data["currency"],
             )
         )
         session.commit()
-    return redirect("/", msg=f"{ticker} añadido a la watchlist.")
+    return redirect(home, msg=f"{ticker} añadido a la lista.")
 
 
-@app.post("/stocks/{stock_id}/delete")
-def delete_stock(stock_id: int):
+@app.post("/api/stocks/{stock_id}/delete")
+def api_delete_stock(stock_id: int):
     with SessionLocal() as session:
         stock = session.get(Stock, stock_id)
-        if stock:
-            session.delete(stock)
+        if not stock:
+            return JSONResponse({"ok": False, "error": "Valor no encontrado."}, status_code=404)
+        session.delete(stock)
+        session.commit()
+    return {"ok": True}
+
+
+# ------------------------------------------------------------------ listas
+
+
+@app.post("/lists/add")
+def add_list(name: str = Form(...)):
+    name = name.strip()[:60]
+    if not name:
+        return redirect("/", err="La lista necesita un nombre.")
+    with SessionLocal() as session:
+        if session.scalar(select(Watchlist).where(Watchlist.name == name)):
+            return redirect("/", err=f"Ya existe una lista llamada '{name}'.")
+        wl = Watchlist(name=name)
+        session.add(wl)
+        session.commit()
+        return redirect(f"/?list={wl.id}", msg=f"Lista '{name}' creada.")
+
+
+@app.post("/lists/{list_id}/delete")
+def delete_list(list_id: int):
+    with SessionLocal() as session:
+        wl = session.get(Watchlist, list_id)
+        if wl:
+            session.delete(wl)
             session.commit()
-    return redirect("/", msg="Eliminado de la watchlist.")
+    return redirect("/", msg="Lista eliminada.")
 
 
 # ------------------------------------------------------------- ficha valor
@@ -128,16 +174,16 @@ def _alerts_json(session, stock_id: int) -> list[dict]:
     ]
 
 
-@app.get("/stocks/{ticker}")
-def stock_detail(request: Request, ticker: str):
-    ticker = ticker.upper()
+@app.get("/stocks/{stock_id}")
+def stock_detail(request: Request, stock_id: int):
     with SessionLocal() as session:
-        stock = session.scalar(select(Stock).where(Stock.ticker == ticker))
+        stock = session.get(Stock, stock_id)
         if not stock:
-            return redirect("/", err=f"{ticker} no está en tu watchlist.")
+            return redirect("/", err="Ese valor no está en tus listas.")
+        _ = stock.watchlist  # cargar relación antes de cerrar sesión
         alerts_json = _alerts_json(session, stock.id)
         refresh_seconds = get_refresh_seconds(session)
-    quote = prices.get_quote(ticker)
+    quote = prices.get_quote(stock.ticker)
     return templates.TemplateResponse(
         request,
         "stock.html",
@@ -161,9 +207,9 @@ def save_notes(stock_id: int, notes: str = Form(""), target_price: str = Form(""
         try:
             stock.target_price = float(target_price.replace(",", ".")) if target_price.strip() else None
         except ValueError:
-            return redirect(f"/stocks/{stock.ticker}", err="Precio objetivo no válido.")
+            return redirect(f"/stocks/{stock.id}", err="Precio objetivo no válido.")
         session.commit()
-        return redirect(f"/stocks/{stock.ticker}", msg="Notas guardadas.")
+        return redirect(f"/stocks/{stock.id}", msg="Notas guardadas.")
 
 
 @app.get("/api/history/{ticker}")

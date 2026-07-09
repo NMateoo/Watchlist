@@ -8,7 +8,15 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 
 from app import config, prices, telegram
-from app.database import Alert, MoveNotice, Stock, get_move_threshold, session_scope, utcnow
+from app.database import (
+    Alert,
+    MoveNotice,
+    Stock,
+    Watchlist,
+    get_move_threshold,
+    session_scope,
+    utcnow,
+)
 
 log = logging.getLogger(__name__)
 
@@ -93,25 +101,35 @@ def _check_big_move(session, stock: Stock, quote: dict, threshold_pct: float, to
 
 
 def send_daily_summary() -> None:
-    """Resumen diario con toda la watchlist, ordenada por variación."""
+    """Resumen diario de todas las listas, cada una ordenada por variación."""
     with session_scope() as session:
-        stocks = session.scalars(select(Stock)).all()
-    if not stocks:
+        watchlists = session.scalars(select(Watchlist).order_by(Watchlist.id)).all()
+        groups = [(wl.name, list(wl.stocks)) for wl in watchlists if wl.stocks]
+    if not groups:
         return
-    quotes = prices.get_quotes([s.ticker for s in stocks], max_age=60)
-    rows = []
-    for stock in sorted(
-        stocks, key=lambda s: quotes.get(s.ticker, {}).get("change_pct", 0), reverse=True
-    ):
-        quote = quotes.get(stock.ticker)
-        if not quote:
-            rows.append(f"• {stock.ticker}: sin datos")
-            continue
-        emoji = "🟢" if quote["change_pct"] >= 0 else "🔴"
-        rows.append(
-            f"{emoji} <b>{stock.ticker}</b>  {fmt_price(quote['price'], quote['currency'])}"
-            f"  ({fmt_pct(quote['change_pct'])})"
-        )
+    all_tickers = {s.ticker for _, stocks in groups for s in stocks}
+    quotes = prices.get_quotes(sorted(all_tickers), max_age=60)
+
+    sections = []
+    total = 0
+    for name, stocks in groups:
+        rows = []
+        for stock in sorted(
+            stocks, key=lambda s: quotes.get(s.ticker, {}).get("change_pct", 0), reverse=True
+        ):
+            quote = quotes.get(stock.ticker)
+            if not quote:
+                rows.append(f"• {stock.ticker}: sin datos")
+                continue
+            emoji = "🟢" if quote["change_pct"] >= 0 else "🔴"
+            rows.append(
+                f"{emoji} <b>{stock.ticker}</b>  {fmt_price(quote['price'], quote['currency'])}"
+                f"  ({fmt_pct(quote['change_pct'])})"
+            )
+        total += len(stocks)
+        header = f"<u>{name}</u>\n" if len(groups) > 1 else ""
+        sections.append(header + "\n".join(rows))
+
     date_str = datetime.now(ZoneInfo(config.TIMEZONE)).strftime("%d/%m/%Y")
-    telegram.send_message(f"📊 <b>Resumen diario — {date_str}</b>\n\n" + "\n".join(rows))
-    log.info("Resumen diario enviado (%d valores)", len(stocks))
+    telegram.send_message(f"📊 <b>Resumen diario — {date_str}</b>\n\n" + "\n\n".join(sections))
+    log.info("Resumen diario enviado (%d valores en %d listas)", total, len(groups))

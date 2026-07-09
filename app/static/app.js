@@ -23,6 +23,67 @@ function flashCell(el) {
   el.classList.add('tick');
 }
 
+const MARKET_STATES = {
+  open: { label: 'Abierto', cls: 'm-open' },
+  pre: { label: 'Pre-market', cls: 'm-pre' },
+  post: { label: 'After-hours', cls: 'm-post' },
+  closed: { label: 'Cerrado', cls: 'm-closed' },
+  unknown: { label: '—', cls: 'm-closed' },
+};
+
+function setMarketBadge(el, state) {
+  const info = MARKET_STATES[state] || MARKET_STATES.unknown;
+  el.innerHTML = '';
+  const dot = document.createElement('span');
+  dot.className = 'market-dot ' + info.cls;
+  const label = document.createElement('span');
+  label.textContent = info.label;
+  el.append(dot, label);
+  el.classList.add('market-badge');
+}
+
+function renderMarketBadges() {
+  for (const el of document.querySelectorAll('.c-market')) {
+    setMarketBadge(el, el.dataset.state);
+  }
+}
+
+// ---- mensajes flash: se ocultan solos y limpian la URL -------------------
+
+function cleanFlashes() {
+  const url = new URL(location);
+  if (url.searchParams.has('msg') || url.searchParams.has('err')) {
+    url.searchParams.delete('msg');
+    url.searchParams.delete('err');
+    history.replaceState(null, '', url);
+  }
+  for (const flash of document.querySelectorAll('.flash.ok, .flash.err')) {
+    setTimeout(() => {
+      flash.classList.add('fade');
+      setTimeout(() => flash.remove(), 600);
+    }, 3500);
+  }
+}
+
+// ---- borrar valores de la lista sin recargar ------------------------------
+
+function setupStockDeletion() {
+  for (const btn of document.querySelectorAll('.delete-stock')) {
+    btn.addEventListener('click', async () => {
+      if (!confirm(`¿Quitar ${btn.dataset.ticker} de la lista?`)) return;
+      try {
+        const res = await fetch(`/api/stocks/${btn.dataset.id}/delete`, { method: 'POST' });
+        const data = await res.json();
+        if (!data.ok) return;
+      } catch { return; }
+      const row = btn.closest('tr');
+      const tbody = row.parentElement;
+      row.remove();
+      if (!tbody.children.length) location.reload(); // mostrar estado vacío
+    });
+  }
+}
+
 // ---- buscador con sugerencias -------------------------------------------
 
 function setupSearch(input, box) {
@@ -87,6 +148,8 @@ function startLivePrices(intervalSeconds) {
       changeCell.textContent = fmtPct(q.change_pct);
       changeCell.classList.toggle('up', q.change_pct >= 0);
       changeCell.classList.toggle('down', q.change_pct < 0);
+      const marketCell = row.querySelector('.c-market');
+      if (marketCell && q.market_state) setMarketBadge(marketCell, q.market_state);
     }
     const note = document.getElementById('last-update');
     if (note) note.textContent = 'última: ' + new Date().toLocaleTimeString('es-ES');
@@ -117,6 +180,8 @@ function startLiveQuote(ticker, intervalSeconds) {
       changeEl.classList.toggle('up', q.change_pct >= 0);
       changeEl.classList.toggle('down', q.change_pct < 0);
     }
+    const marketEl = document.getElementById('market-state');
+    if (marketEl && q.market_state) setMarketBadge(marketEl, q.market_state);
   }
   setInterval(refresh, intervalSeconds * 1000);
 }

@@ -2,8 +2,9 @@
 
 Monitoriza tus acciones, ETFs y cripto desde una web y recibe alertas en Telegram:
 
-- ⚡ **Precios en vivo** — el dashboard se actualiza solo cada pocos segundos (intervalo configurable en Ajustes, mínimo 5 s).
-- 🔎 **Buscador con sugerencias** — escribe "apple" o "santander" y elige el ticker.
+- ⚡ **Precios en vivo** — el dashboard se actualiza solo cada pocos segundos (configurable en Ajustes, mínimo 5 s), incluyendo pre-market y after-hours, con indicador del estado del mercado.
+- 🗂️ **Varias listas de seguimiento** — organiza tus valores en pestañas.
+- 🔎 **Buscador con sugerencias** — escribe "apple", "santander" o "gold" y elige el ticker. Incluye materias primas (futuros: `GC=F` oro, `CL=F` petróleo).
 - 🔔 **Alertas de precio** — te avisa cuando un valor cruza un umbral que definas.
 - ⚡ **Cambios bruscos** — aviso si algo se mueve más de X% en el día (una vez al día por valor).
 - 📊 **Resumen diario** — el estado de toda tu watchlist a la hora que elijas.

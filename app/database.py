@@ -9,9 +9,12 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     String,
     Text,
     create_engine,
+    inspect,
+    text,
 )
 from sqlalchemy.orm import (
     DeclarativeBase,
@@ -36,17 +39,33 @@ class Base(DeclarativeBase):
     pass
 
 
-class Stock(Base):
-    __tablename__ = "stocks"
+class Watchlist(Base):
+    __tablename__ = "watchlists"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    ticker: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(60), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    stocks: Mapped[list["Stock"]] = relationship(
+        back_populates="watchlist", cascade="all, delete-orphan"
+    )
+
+
+class Stock(Base):
+    __tablename__ = "stocks"
+    # Un mismo ticker puede estar en varias listas, pero no repetido en una.
+    __table_args__ = (Index("ux_stocks_ticker_list", "ticker", "watchlist_id", unique=True),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker: Mapped[str] = mapped_column(String(20), index=True)
+    watchlist_id: Mapped[int] = mapped_column(ForeignKey("watchlists.id"))
     name: Mapped[str] = mapped_column(String(120), default="")
     currency: Mapped[str] = mapped_column(String(10), default="USD")
     notes: Mapped[str] = mapped_column(Text, default="")
     target_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     added_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
+    watchlist: Mapped[Watchlist] = relationship(back_populates="stocks")
     alerts: Mapped[list["Alert"]] = relationship(
         back_populates="stock", cascade="all, delete-orphan"
     )
@@ -88,7 +107,24 @@ class Setting(Base):
 
 
 def init_db() -> None:
+    # Migración desde el esquema v1 (sin listas): añadir watchlist_id a stocks.
+    inspector = inspect(engine)
+    needs_migration = inspector.has_table("stocks") and "watchlist_id" not in [
+        c["name"] for c in inspector.get_columns("stocks")
+    ]
     Base.metadata.create_all(engine)
+    if needs_migration:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "INSERT INTO watchlists (id, name, created_at) VALUES (1, 'Mi lista', CURRENT_TIMESTAMP)"
+            ))
+            conn.execute(text("DROP INDEX IF EXISTS ix_stocks_ticker"))
+            conn.execute(text("ALTER TABLE stocks ADD COLUMN watchlist_id INTEGER REFERENCES watchlists(id)"))
+            conn.execute(text("UPDATE stocks SET watchlist_id = 1"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_stocks_ticker ON stocks (ticker)"))
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_stocks_ticker_list ON stocks (ticker, watchlist_id)"
+            ))
 
 
 @contextmanager

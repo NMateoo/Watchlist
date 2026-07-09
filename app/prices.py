@@ -15,23 +15,54 @@ _cache: dict[str, tuple[float, dict]] = {}
 CACHE_TTL_SECONDS = 120
 
 
-def _fetch_quote(ticker: str) -> dict | None:
-    """Cotización actual de un ticker, o None si no se pudo obtener."""
+def _market_state(trading_period: dict | None) -> str:
+    """Estado del mercado según los horarios que devuelve Yahoo: pre/open/post/closed."""
+    if not trading_period:
+        return "unknown"
     try:
-        info = yf.Ticker(ticker).fast_info
-        price = info.last_price
-        prev = info.previous_close
+        now = time.time()
+        regular = trading_period["regular"]
+        if regular["start"] <= now < regular["end"]:
+            return "open"
+        pre = trading_period["pre"]
+        if pre["start"] <= now < pre["end"]:
+            return "pre"
+        post = trading_period["post"]
+        if post["start"] <= now < post["end"]:
+            return "post"
+        return "closed"
+    except (KeyError, TypeError):
+        return "unknown"
+
+
+def _fetch_quote(ticker: str) -> dict | None:
+    """Cotización actual (incluye pre/after-market), o None si no se pudo obtener."""
+    try:
+        t = yf.Ticker(ticker)
+        # La API de gráficos con prepost=True trae el último precio también
+        # fuera del horario regular (pre-market y after-hours).
+        df = t.history(period="1d", interval="1m", prepost=True)
+        meta = t.history_metadata or {}
+        price = None
+        if df is not None and not df.empty:
+            closes = df["Close"].dropna()
+            if not closes.empty:
+                price = float(closes.iloc[-1])
+        if price is None:
+            price = meta.get("regularMarketPrice")
         if price is None:
             return None
+        prev = meta.get("chartPreviousClose") or meta.get("previousClose")
         change_pct = ((price - prev) / prev * 100) if prev else 0.0
         return {
             "ticker": ticker,
             "price": float(price),
             "prev_close": float(prev) if prev else None,
             "change_pct": round(change_pct, 2),
-            "currency": (info.currency or "USD").upper(),
-            "year_high": float(info.year_high) if info.year_high else None,
-            "year_low": float(info.year_low) if info.year_low else None,
+            "currency": (meta.get("currency") or "USD").upper(),
+            "year_high": meta.get("fiftyTwoWeekHigh"),
+            "year_low": meta.get("fiftyTwoWeekLow"),
+            "market_state": _market_state(meta.get("currentTradingPeriod")),
         }
     except Exception as exc:
         log.warning("No se pudo obtener cotización de %s: %s", ticker, exc)
