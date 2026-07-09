@@ -22,6 +22,7 @@ from app.database import (
     Watchlist,
     get_check_interval,
     get_move_threshold,
+    get_summary_interval,
     get_summary_time,
     set_setting,
 )
@@ -210,16 +211,20 @@ def _settings_view(message_id: int | None = None) -> None:
         move = get_move_threshold(session)
         interval = get_check_interval(session)
         summary = get_summary_time(session)
+        periodic = get_summary_interval(session)
+    periodic_txt = f"cada <b>{periodic} min</b>" if periodic else "<b>desactivado</b>"
     text = (
         "<b>⚙️ Ajustes</b>\n"
         f"⚡ Aviso de cambio brusco: <b>±{move}%</b>\n"
         f"⏱ Comprobación de alertas: cada <b>{interval} min</b>\n"
+        f"📊 Resumen automático: {periodic_txt}\n"
         f"🕙 Resumen diario: a las <b>{summary}</b> ({config.TIMEZONE})"
     )
     keyboard = [
         [_btn("⚡ Cambiar umbral %", "set:move")],
-        [_btn("⏱ Cambiar intervalo", "set:interval")],
-        [_btn("🕙 Cambiar hora resumen", "set:summary")],
+        [_btn("⏱ Cambiar intervalo alertas", "set:interval")],
+        [_btn("📊 Cambiar resumen automático", "set:periodic")],
+        [_btn("🕙 Cambiar hora resumen diario", "set:summary")],
         [_btn("◀️ Menú", "menu")],
     ]
     _show(text, keyboard, message_id)
@@ -374,6 +379,7 @@ def _handle_callback(update: dict) -> None:
         prompts = {
             "move": ("move", "Nuevo umbral de cambio brusco en % (ej: 5):"),
             "interval": ("interval", "Cada cuántos minutos comprobar alertas (ej: 10):"),
+            "periodic": ("summary_interval", "Cada cuántos minutos te mando el resumen automático (0 para desactivarlo):"),
             "summary": ("summary_time", "Hora del resumen diario en formato HH:MM (ej: 22:10):"),
         }
         key, prompt = prompts[args[0]]
@@ -461,6 +467,16 @@ def _handle_pending(text: str) -> bool:
             return True
         with SessionLocal() as session:
             set_setting(session, "check_interval_minutes", str(int(value)))
+            session.commit()
+        scheduler.reschedule()
+        _settings_view()
+    elif action == "summary_interval":
+        value = _parse_number(text)
+        if value is None or not 0 <= value <= 1440:
+            _send("Debe ser un número de minutos entre 0 (desactivado) y 1440.")
+            return True
+        with SessionLocal() as session:
+            set_setting(session, "summary_interval_minutes", str(int(value)))
             session.commit()
         scheduler.reschedule()
         _settings_view()

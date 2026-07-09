@@ -25,7 +25,28 @@ SPOT_CATALOG = [
     ("XPTUSD", "Platino spot XPT/USD", ["platino", "platinum", "xpt"]),
     ("XPDUSD", "Paladio spot XPD/USD", ["paladio", "palladium", "xpd"]),
 ]
+# Futuros de materias primas de Yahoo, buscables por nombre en español/inglés.
+COMMODITY_CATALOG = [
+    ("GC=F", "Oro (futuros)", ["oro", "gold"]),
+    ("SI=F", "Plata (futuros)", ["plata", "silver"]),
+    ("HG=F", "Cobre (futuros)", ["cobre", "copper"]),
+    ("PL=F", "Platino (futuros)", ["platino", "platinum"]),
+    ("PA=F", "Paladio (futuros)", ["paladio", "palladium"]),
+    ("ALI=F", "Aluminio (futuros)", ["aluminio", "aluminum"]),
+    ("CL=F", "Petróleo WTI (futuros)", ["petroleo", "petróleo", "crudo", "oil", "wti"]),
+    ("BZ=F", "Petróleo Brent (futuros)", ["petroleo", "petróleo", "crudo", "brent"]),
+    ("NG=F", "Gas natural (futuros)", ["gas", "natural gas"]),
+    ("ZW=F", "Trigo (futuros)", ["trigo", "wheat"]),
+    ("ZC=F", "Maíz (futuros)", ["maiz", "maíz", "corn"]),
+    ("ZS=F", "Soja (futuros)", ["soja", "soybean"]),
+    ("KC=F", "Café (futuros)", ["cafe", "café", "coffee"]),
+    ("SB=F", "Azúcar (futuros)", ["azucar", "azúcar", "sugar"]),
+    ("CC=F", "Cacao (futuros)", ["cacao", "cocoa"]),
+    ("CT=F", "Algodón (futuros)", ["algodon", "algodón", "cotton"]),
+    ("LE=F", "Ganado vacuno (futuros)", ["ganado", "vacuno", "cattle"]),
+]
 SPOT_NAMES = {sym: name for sym, name, _ in SPOT_CATALOG}
+CATALOG_NAMES = {**SPOT_NAMES, **{sym: name for sym, name, _ in COMMODITY_CATALOG}}
 # Futuro más cercano en Yahoo: referencia para variación, rango 52 sem.,
 # horario de mercado y gráfico (cotiza prácticamente pegado al spot).
 SPOT_FUTURES = {"XAUUSD": "GC=F", "XAGUSD": "SI=F", "XPTUSD": "PL=F", "XPDUSD": "PA=F"}
@@ -35,25 +56,46 @@ def is_spot(ticker: str) -> bool:
     return bool(SPOT_PATTERN.match(ticker.upper()))
 
 
+# Relación spot/futuro por metal, recalibrada contra gold-api cada 10 min.
+# Entre calibraciones el precio spot se mueve tick a tick con el futuro.
+_spot_ratio: dict[str, tuple[float, float]] = {}
+SPOT_RATIO_TTL = 600
+
+
 def _fetch_spot_quote(ticker: str) -> dict | None:
-    try:
-        resp = httpx.get(f"https://api.gold-api.com/price/{ticker[:3]}", timeout=10)
-        price = float(resp.json()["price"])
-    except Exception as exc:
-        log.warning("gold-api: sin cotización de %s: %s", ticker, exc)
+    future = get_quote(SPOT_FUTURES[ticker], max_age=5)
+    calib = _spot_ratio.get(ticker)
+    if not calib or time.time() - calib[0] > SPOT_RATIO_TTL:
+        try:
+            resp = httpx.get(f"https://api.gold-api.com/price/{ticker[:3]}", timeout=10)
+            spot = float(resp.json()["price"])
+            if future and future["price"]:
+                _spot_ratio[ticker] = (time.time(), spot / future["price"])
+            elif calib is None:
+                # Sin futuro no hay tick en vivo, pero al menos damos el spot puro.
+                weekday_open = datetime.now(timezone.utc).weekday() < 5
+                return {
+                    "ticker": ticker, "price": spot, "prev_close": None, "change_pct": 0.0,
+                    "currency": "USD", "year_high": None, "year_low": None,
+                    "market_state": "open" if weekday_open else "closed",
+                }
+        except Exception as exc:
+            log.warning("gold-api: sin calibración de %s: %s", ticker, exc)
+        calib = _spot_ratio.get(ticker)
+    if not future:
         return None
-    future = get_quote(SPOT_FUTURES[ticker], max_age=60)
-    change_pct = future["change_pct"] if future else 0.0
-    weekday_open = datetime.now(timezone.utc).weekday() < 5
+    ratio = calib[1] if calib else 1.0
+    price = future["price"] * ratio
+    change_pct = future["change_pct"]
     return {
         "ticker": ticker,
-        "price": price,
+        "price": round(price, 4),
         "prev_close": round(price / (1 + change_pct / 100), 4) if change_pct else None,
         "change_pct": change_pct,
         "currency": "USD",
-        "year_high": future["year_high"] if future else None,
-        "year_low": future["year_low"] if future else None,
-        "market_state": future["market_state"] if future else ("open" if weekday_open else "closed"),
+        "year_high": round(future["year_high"] * ratio, 4) if future.get("year_high") else None,
+        "year_low": round(future["year_low"] * ratio, 4) if future.get("year_low") else None,
+        "market_state": future["market_state"],
     }
 
 
@@ -136,8 +178,10 @@ def get_quotes(tickers: list[str], max_age: int = CACHE_TTL_SECONDS) -> dict[str
 def lookup_name(ticker: str) -> str:
     """Nombre de la empresa/activo; se consulta una sola vez al añadirlo."""
     ticker = ticker.upper()
+    if ticker in CATALOG_NAMES:
+        return CATALOG_NAMES[ticker]
     if is_spot(ticker):
-        return SPOT_NAMES.get(ticker, f"{ticker[:3]}/{ticker[3:]} spot")
+        return f"{ticker[:3]}/{ticker[3:]} spot"
     try:
         info = yf.Ticker(ticker).info
         return info.get("shortName") or info.get("longName") or ticker
@@ -145,14 +189,24 @@ def lookup_name(ticker: str) -> str:
         return ticker
 
 
-def _spot_matches(query: str) -> list[dict]:
-    """Metales spot (Stooq) que encajan con lo escrito."""
+def _catalog_matches(query: str) -> list[dict]:
+    """Metales spot y commodities del catálogo que encajan con lo escrito."""
     q_upper, q_lower = query.upper(), query.lower()
-    return [
+
+    def matches(sym: str, keywords: list[str]) -> bool:
+        return sym.startswith(q_upper) or any(kw.startswith(q_lower) for kw in keywords)
+
+    results = [
         {"symbol": sym, "name": name, "exchange": "Spot", "type": "Metal"}
         for sym, name, keywords in SPOT_CATALOG
-        if sym.startswith(q_upper) or any(q_lower in kw for kw in keywords)
+        if matches(sym, keywords)
     ]
+    results += [
+        {"symbol": sym, "name": name, "exchange": "COMEX/NYMEX", "type": "Futuros"}
+        for sym, name, keywords in COMMODITY_CATALOG
+        if matches(sym, keywords)
+    ]
+    return results
 
 
 def search_symbols(query: str, limit: int = 8) -> list[dict]:
@@ -175,7 +229,7 @@ def search_symbols(query: str, limit: int = 8) -> list[dict]:
             raw = resp.json().get("quotes", [])
         except Exception as exc2:
             log.warning("Búsqueda de '%s' falló: %s", query, exc2)
-    results = _spot_matches(query)
+    results = _catalog_matches(query)
     seen = {r["symbol"] for r in results}
     for item in raw:
         symbol = item.get("symbol")

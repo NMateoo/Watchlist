@@ -130,6 +130,6 @@ def send_daily_summary() -> None:
         header = f"<u>{name}</u>\n" if len(groups) > 1 else ""
         sections.append(header + "\n".join(rows))
 
-    date_str = datetime.now(ZoneInfo(config.TIMEZONE)).strftime("%d/%m/%Y")
-    telegram.send_message(f"📊 <b>Resumen diario — {date_str}</b>\n\n" + "\n\n".join(sections))
+    stamp = datetime.now(ZoneInfo(config.TIMEZONE)).strftime("%d/%m/%Y %H:%M")
+    telegram.send_message(f"📊 <b>Resumen — {stamp}</b>\n\n" + "\n\n".join(sections))
     log.info("Resumen diario enviado (%d valores en %d listas)", total, len(groups))

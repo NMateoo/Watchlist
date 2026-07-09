@@ -31,3 +31,7 @@ DEFAULT_MOVE_THRESHOLD = float(os.getenv("MOVE_ALERT_THRESHOLD", "5"))
 # Poner a 0 para que esta instancia no escuche comandos de Telegram
 # (solo puede haber UNA instancia escuchando a la vez).
 BOT_POLLING = os.getenv("BOT_POLLING", "1") != "0"
+
+# Poner a 0 para que esta instancia no compruebe alertas ni mande resúmenes
+# (evita duplicados cuando local y Render comparten base de datos).
+SCHEDULER_ENABLED = os.getenv("SCHEDULER_ENABLED", "1") != "0"

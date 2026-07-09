@@ -175,6 +175,15 @@ def get_check_interval(session) -> int:
     return min(max(value, 1), 720)
 
 
+def get_summary_interval(session) -> int:
+    """Minutos entre resúmenes automáticos (0 = desactivado)."""
+    try:
+        value = int(float(get_setting(session, "summary_interval_minutes", "30")))
+    except ValueError:
+        value = 30
+    return min(max(value, 0), 1440)
+
+
 def get_summary_time(session) -> str:
     """Hora HH:MM del resumen diario."""
     value = get_setting(session, "daily_summary_time", config.DAILY_SUMMARY_TIME)
