@@ -9,6 +9,10 @@ Monitoriza tus acciones, ETFs y cripto desde una web y recibe alertas en Telegra
 - ⚡ **Cambios bruscos** — aviso si algo se mueve más de X% en el día (una vez al día por valor).
 - 📊 **Resumen diario** — el estado de toda tu watchlist a la hora que elijas.
 - 📝 **Notas** — precio objetivo y apuntes personales por cada valor.
+- 🤖 **Bot interactivo** — manda `/menu` al bot y maneja TODO desde Telegram: listas, añadir/quitar
+  valores, alertas, notas, objetivo y ajustes. Comandos: `/menu`, `/precio AAPL`, `/resumen`, `/ayuda`.
+  Solo una instancia puede escuchar los comandos a la vez: la que tenga `BOT_POLLING=1` (por defecto);
+  pon `BOT_POLLING=0` en las demás (p. ej. en local si ya lo atiende Render).
 
 Datos de [Yahoo Finance](https://finance.yahoo.com) (gratis, sin API key). Funciona con
 acciones de EE.UU. (`AAPL`), europeas (`SAN.MC`, `ITX.MC`, `AIR.PA`), cripto (`BTC-USD`)

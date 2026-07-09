@@ -27,3 +27,7 @@ TIMEZONE = os.getenv("TIMEZONE", "Europe/Madrid")
 
 # Umbral por defecto (%) para avisar de cambios bruscos; editable en Ajustes.
 DEFAULT_MOVE_THRESHOLD = float(os.getenv("MOVE_ALERT_THRESHOLD", "5"))
+
+# Poner a 0 para que esta instancia no escuche comandos de Telegram
+# (solo puede haber UNA instancia escuchando a la vez).
+BOT_POLLING = os.getenv("BOT_POLLING", "1") != "0"

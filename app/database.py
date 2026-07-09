@@ -164,3 +164,23 @@ def get_refresh_seconds(session) -> int:
     except ValueError:
         value = 10
     return max(5, value)
+
+
+def get_check_interval(session) -> int:
+    """Cada cuántos minutos se comprueban las alertas (1–720)."""
+    try:
+        value = int(float(get_setting(session, "check_interval_minutes", str(config.CHECK_INTERVAL_MINUTES))))
+    except ValueError:
+        value = config.CHECK_INTERVAL_MINUTES
+    return min(max(value, 1), 720)
+
+
+def get_summary_time(session) -> str:
+    """Hora HH:MM del resumen diario."""
+    value = get_setting(session, "daily_summary_time", config.DAILY_SUMMARY_TIME)
+    parts = value.split(":")
+    if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+        hour, minute = int(parts[0]), int(parts[1])
+        if 0 <= hour < 24 and 0 <= minute < 60:
+            return f"{hour:02d}:{minute:02d}"
+    return "22:10"

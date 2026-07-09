@@ -13,7 +13,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 
 from app import alerts as alerts_mod
-from app import config, prices, scheduler, telegram
+from app import bot, config, prices, scheduler, telegram
 from app.database import (
     Alert,
     SessionLocal,
@@ -32,7 +32,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 async def lifespan(app: FastAPI):
     init_db()
     scheduler.start()
+    bot.start()
     yield
+    bot.stop()
     scheduler.stop()
 
 
@@ -291,6 +293,8 @@ def settings_page(request: Request):
     with SessionLocal() as session:
         move_threshold = get_move_threshold(session)
         refresh_seconds = get_refresh_seconds(session)
+        check_interval = get_check_interval(session)
+        summary_time = get_summary_time(session)
     chat_id_hint = None
     if config.TELEGRAM_BOT_TOKEN and not config.TELEGRAM_CHAT_ID:
         chat_id_hint = telegram.get_chat_id_hint()
@@ -303,8 +307,8 @@ def settings_page(request: Request):
             "chat_id_hint": chat_id_hint,
             "move_threshold": move_threshold,
             "refresh_seconds": refresh_seconds,
-            "check_interval": config.CHECK_INTERVAL_MINUTES,
-            "summary_time": config.DAILY_SUMMARY_TIME,
+            "check_interval": check_interval,
+            "summary_time": summary_time,
             "timezone": config.TIMEZONE,
         },
     )
@@ -348,6 +352,7 @@ def test_telegram():
     return redirect("/settings", err="No se pudo enviar. Revisa el token y el chat_id.")
 
 
-@app.get("/health")
+# UptimeRobot usa HEAD; hay que aceptarlo además de GET.
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health():
     return {"status": "ok"}
