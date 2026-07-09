@@ -16,9 +16,11 @@ from app import alerts as alerts_mod
 from app import bot, config, prices, scheduler, telegram
 from app.database import (
     Alert,
+    BotUser,
     SessionLocal,
     Stock,
     Watchlist,
+    ensure_admin,
     get_check_interval,
     get_move_threshold,
     get_refresh_seconds,
@@ -33,6 +35,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    ensure_admin()
     scheduler.start()
     bot.start()
     yield
@@ -65,7 +68,8 @@ def index(request: Request, list_id: int | None = Query(None, alias="list")):
     with SessionLocal() as session:
         watchlists = session.scalars(select(Watchlist).order_by(Watchlist.id)).all()
         if not watchlists:
-            default = Watchlist(name="Mi lista")
+            admin = session.scalar(select(BotUser).where(BotUser.role == "admin"))
+            default = Watchlist(name="Mi lista", owner_id=admin.id if admin else None)
             session.add(default)
             session.commit()
             watchlists = [default]
@@ -145,7 +149,8 @@ def add_list(name: str = Form(...)):
     with SessionLocal() as session:
         if session.scalar(select(Watchlist).where(Watchlist.name == name)):
             return redirect("/", err=f"Ya existe una lista llamada '{name}'.")
-        wl = Watchlist(name=name)
+        admin = session.scalar(select(BotUser).where(BotUser.role == "admin"))
+        wl = Watchlist(name=name, owner_id=admin.id if admin else None)
         session.add(wl)
         session.commit()
         return redirect(f"/?list={wl.id}", msg=f"Lista '{name}' creada.")
@@ -363,4 +368,4 @@ def test_telegram():
 # "v" permite comprobar qué versión hay desplegada.
 @app.api_route("/health", methods=["GET", "HEAD"])
 def health():
-    return {"status": "ok", "v": 4}
+    return {"status": "ok", "v": 5}

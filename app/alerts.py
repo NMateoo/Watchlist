@@ -11,6 +11,7 @@ from sqlalchemy import select
 from app import config, prices, telegram
 from app.database import (
     Alert,
+    BotUser,
     MoveNotice,
     Stock,
     Watchlist,
@@ -40,8 +41,14 @@ def _local_today() -> str:
     return datetime.now(ZoneInfo(config.TIMEZONE)).strftime("%Y-%m-%d")
 
 
+def _owner_chat(stock: Stock) -> str | None:
+    """Chat del dueño de la lista del valor (None → chat del admin)."""
+    owner = stock.watchlist.owner if stock.watchlist else None
+    return owner.chat_id if owner else None
+
+
 def check_alerts() -> None:
-    """Job principal: comprueba umbrales y cambios bruscos de toda la watchlist."""
+    """Job principal: comprueba umbrales y cambios bruscos de todas las listas."""
     with session_scope() as session:
         stocks = session.scalars(select(Stock)).all()
         if not stocks:
@@ -73,7 +80,8 @@ def _check_threshold_alerts(session, stock: Stock, quote: dict) -> None:
             f"🔔 <b>{stock.ticker}</b> ({esc(stock.name)})\n"
             f"Ha cruzado {direction} tu umbral de {fmt_price(alert.threshold, quote['currency'])}\n"
             f"Precio actual: <b>{fmt_price(price, quote['currency'])}</b> "
-            f"({fmt_pct(quote['change_pct'])} hoy)"
+            f"({fmt_pct(quote['change_pct'])} hoy)",
+            chat_id=_owner_chat(stock),
         )
         if sent:
             alert.active = False
@@ -85,8 +93,13 @@ def _check_big_move(session, stock: Stock, quote: dict, threshold_pct: float, to
     change = quote["change_pct"]
     if abs(change) < threshold_pct:
         return
+    chat = _owner_chat(stock)
     already = session.scalar(
-        select(MoveNotice).where(MoveNotice.ticker == stock.ticker, MoveNotice.day == today)
+        select(MoveNotice).where(
+            MoveNotice.ticker == stock.ticker,
+            MoveNotice.day == today,
+            MoveNotice.chat_id == chat,
+        )
     )
     if already:
         return
@@ -94,10 +107,11 @@ def _check_big_move(session, stock: Stock, quote: dict, threshold_pct: float, to
     sent = telegram.send_message(
         f"{emoji} <b>{stock.ticker}</b> ({esc(stock.name)})\n"
         f"Movimiento brusco hoy: <b>{fmt_pct(change)}</b>\n"
-        f"Precio actual: {fmt_price(quote['price'], quote['currency'])}"
+        f"Precio actual: {fmt_price(quote['price'], quote['currency'])}",
+        chat_id=chat,
     )
     if sent:
-        session.add(MoveNotice(ticker=stock.ticker, day=today, pct=change))
+        session.add(MoveNotice(ticker=stock.ticker, day=today, chat_id=chat, pct=change))
         log.info("Aviso de cambio brusco de %s (%.2f%%)", stock.ticker, change)
 
 
@@ -128,10 +142,24 @@ def _summary_line(info: dict, quote: dict | None) -> str:
 
 
 def send_daily_summary() -> None:
-    """Resumen de todas las listas: variación, distancia al máximo de 52
-    semanas, precio objetivo, alertas activas y estado del mercado."""
+    """Manda a cada usuario del bot el resumen de SUS listas."""
     with session_scope() as session:
-        watchlists = session.scalars(select(Watchlist).order_by(Watchlist.id)).all()
+        users = session.scalars(
+            select(BotUser).where(BotUser.role.in_(("admin", "user")))
+        ).all()
+        chats = [u.chat_id for u in users]
+    for chat in chats:
+        send_summary_to(chat)
+
+
+def send_summary_to(chat_id: str | None) -> bool:
+    """Resumen de las listas de un usuario: variación, distancia al máximo de
+    52 semanas, precio objetivo, alertas activas y estado del mercado."""
+    with session_scope() as session:
+        query = select(Watchlist).order_by(Watchlist.id)
+        if chat_id is not None:
+            query = query.join(BotUser).where(BotUser.chat_id == str(chat_id))
+        watchlists = session.scalars(query).all()
         groups = []
         for wl in watchlists:
             if not wl.stocks:
@@ -146,7 +174,7 @@ def send_daily_summary() -> None:
             ]
             groups.append((wl.name, stocks))
     if not groups:
-        return
+        return False
     all_tickers = {s["ticker"] for _, stocks in groups for s in stocks}
     quotes = prices.get_quotes(sorted(all_tickers), max_age=60)
 
@@ -176,5 +204,9 @@ def send_daily_summary() -> None:
         )
 
     stamp = datetime.now(ZoneInfo(config.TIMEZONE)).strftime("%d/%m/%Y %H:%M")
-    telegram.send_message(f"📊 <b>Resumen — {stamp}</b>\n\n" + "\n\n".join(sections) + footer)
-    log.info("Resumen enviado (%d valores en %d listas)", total, len(groups))
+    sent = telegram.send_message(
+        f"📊 <b>Resumen — {stamp}</b>\n\n" + "\n\n".join(sections) + footer,
+        chat_id=chat_id,
+    )
+    log.info("Resumen a %s (%d valores en %d listas)", chat_id or "admin", total, len(groups))
+    return sent

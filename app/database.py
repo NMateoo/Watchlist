@@ -39,13 +39,29 @@ class Base(DeclarativeBase):
     pass
 
 
+class BotUser(Base):
+    """Usuario del bot de Telegram. El primero (chat de TELEGRAM_CHAT_ID) es admin."""
+
+    __tablename__ = "bot_users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    chat_id: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(80), default="")
+    role: Mapped[str] = mapped_column(String(10), default="pending")  # admin | user | pending
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    watchlists: Mapped[list["Watchlist"]] = relationship(back_populates="owner")
+
+
 class Watchlist(Base):
     __tablename__ = "watchlists"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(60), unique=True)
+    owner_id: Mapped[int | None] = mapped_column(ForeignKey("bot_users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
+    owner: Mapped[BotUser | None] = relationship(back_populates="watchlists")
     stocks: Mapped[list["Stock"]] = relationship(
         back_populates="watchlist", cascade="all, delete-orphan"
     )
@@ -95,6 +111,7 @@ class MoveNotice(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     ticker: Mapped[str] = mapped_column(String(20), index=True)
     day: Mapped[str] = mapped_column(String(10), index=True)  # YYYY-MM-DD local
+    chat_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     pct: Mapped[float] = mapped_column(Float)
     sent_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
@@ -107,13 +124,20 @@ class Setting(Base):
 
 
 def init_db() -> None:
-    # Migración desde el esquema v1 (sin listas): añadir watchlist_id a stocks.
     inspector = inspect(engine)
-    needs_migration = inspector.has_table("stocks") and "watchlist_id" not in [
+    # Migración v1 → v2 (sin listas): añadir watchlist_id a stocks.
+    needs_v2 = inspector.has_table("stocks") and "watchlist_id" not in [
         c["name"] for c in inspector.get_columns("stocks")
     ]
+    # Migración v2 → v3 (multi-usuario): owner en listas y chat en avisos.
+    needs_owner = inspector.has_table("watchlists") and "owner_id" not in [
+        c["name"] for c in inspector.get_columns("watchlists")
+    ]
+    needs_chat = inspector.has_table("move_notices") and "chat_id" not in [
+        c["name"] for c in inspector.get_columns("move_notices")
+    ]
     Base.metadata.create_all(engine)
-    if needs_migration:
+    if needs_v2:
         with engine.begin() as conn:
             conn.execute(text(
                 "INSERT INTO watchlists (id, name, created_at) VALUES (1, 'Mi lista', CURRENT_TIMESTAMP)"
@@ -125,6 +149,31 @@ def init_db() -> None:
             conn.execute(text(
                 "CREATE UNIQUE INDEX IF NOT EXISTS ux_stocks_ticker_list ON stocks (ticker, watchlist_id)"
             ))
+    if needs_owner:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE watchlists ADD COLUMN owner_id INTEGER REFERENCES bot_users(id)"))
+    if needs_chat:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE move_notices ADD COLUMN chat_id VARCHAR(32)"))
+
+
+def ensure_admin() -> None:
+    """Crea el usuario admin (TELEGRAM_CHAT_ID) y adopta las listas sin dueño."""
+    from app import config
+
+    if not config.TELEGRAM_CHAT_ID:
+        return
+    from sqlalchemy import select, update
+
+    with session_scope() as session:
+        admin = session.scalar(select(BotUser).where(BotUser.role == "admin"))
+        if not admin:
+            admin = BotUser(chat_id=str(config.TELEGRAM_CHAT_ID), name="Admin", role="admin")
+            session.add(admin)
+            session.flush()
+        session.execute(
+            update(Watchlist).where(Watchlist.owner_id.is_(None)).values(owner_id=admin.id)
+        )
 
 
 @contextmanager

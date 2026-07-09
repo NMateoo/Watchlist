@@ -16,14 +16,14 @@ def is_configured() -> bool:
     return bool(config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID)
 
 
-def send_message(text: str) -> bool:
-    """Envía `text` (HTML) al chat configurado. Devuelve True si se envió."""
+def send_message(text: str, chat_id: str | None = None) -> bool:
+    """Envía `text` (HTML) a `chat_id` (por defecto, el admin). True si se envió."""
     if not is_configured():
         log.info("Telegram sin configurar; mensaje omitido: %.60s...", text)
         return False
     url = API_URL.format(token=config.TELEGRAM_BOT_TOKEN, method="sendMessage")
     payload = {
-        "chat_id": config.TELEGRAM_CHAT_ID,
+        "chat_id": chat_id or config.TELEGRAM_CHAT_ID,
         "text": text,
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
