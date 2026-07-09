@@ -201,7 +201,11 @@ def _lists_view(ctx: dict, message_id: int | None = None) -> None:
                 label += f" · {wl.owner.name}"
             rows.append([_btn(label, f"l:{wl.id}")])
     rows.append([_btn("➕ Nueva lista", "lnew"), _btn("◀️ Menú", "menu")])
-    text = "<b>Tus listas</b>" if watchlists else "No tienes listas todavía."
+    if watchlists:
+        text = "<b>Tus listas</b>"
+    else:
+        text = ("No tienes listas todavía. Pídele al administrador que te asigne "
+                "una, o crea la tuya con ➕ Nueva lista.")
     _show(ctx, text, rows, message_id)
 
 
@@ -443,6 +447,7 @@ def _add_stock(ctx: dict, symbol: str, list_id: int, message_id: int | None) -> 
 
 
 def _handle_search_text(ctx: dict, text: str, list_id: int | None) -> None:
+    text = text.strip().splitlines()[0]  # buscar solo la primera línea
     results = prices.search_symbols(text, limit=6)
     if not results:
         _send(
@@ -486,7 +491,12 @@ def _handle_callback(update: dict) -> None:
         _list_view(ctx, int(args[0]), message_id)
     elif action == "lnew":
         _pending[ctx["chat"]] = {"action": "new_list"}
-        _send("Escríbeme el nombre de la nueva lista:", [[_btn("Cancelar", "menu")]], ctx["chat"])
+        _send(
+            "Escríbeme el <b>nombre</b> de la nueva lista (solo el nombre — "
+            "los valores se añaden después con ➕ Añadir):",
+            [[_btn("Cancelar", "menu")]],
+            ctx["chat"],
+        )
     elif action == "ldel":
         keyboard = [[_btn("Sí, eliminar", f"ldel2:{args[0]}"), _btn("No", f"l:{args[0]}")]]
         _edit(ctx["chat"], message_id, "¿Eliminar la lista con todo su contenido?", keyboard)
@@ -583,8 +593,13 @@ def _handle_callback(update: dict) -> None:
                 user.role = "user"
                 session.commit()
                 _send(
-                    "✅ ¡Acceso concedido! Escribe /menu para empezar. "
-                    "El administrador puede asignarte listas, y tú puedes crear las tuyas.",
+                    "✅ ¡Acceso concedido! Escribe /menu para empezar.\n\n"
+                    "ℹ️ Cómo funciona:\n"
+                    "• El administrador te asignará tu lista de valores (o crea una tuya "
+                    "con 📋 Mis listas → ➕ Nueva lista).\n"
+                    "• Para añadir un valor: entra en la lista → ➕ Añadir y escribe el "
+                    "nombre o ticker (apple, SAN.MC, oro…).\n"
+                    "• Recibirás aquí las alertas y resúmenes de tus listas.",
                     chat_id=user.chat_id,
                 )
         _users_view(ctx, message_id)
@@ -653,7 +668,18 @@ def _handle_pending(ctx: dict, text: str) -> bool:
     if action == "search":
         _handle_search_text(ctx, text, pending.get("list_id"))
     elif action == "new_list":
-        name = text.strip()[:60]
+        # Solo la primera línea: si mandan varios renglones (p. ej. tickers),
+        # no queremos un nombre de lista multilínea.
+        name = text.strip().splitlines()[0].strip()[:60]
+        if not name:
+            _send("Necesito un nombre para la lista.", chat_id=chat)
+            return True
+        if len(text.strip().splitlines()) > 1:
+            _send(
+                f"Ojo: he usado solo «{esc(name)}» como nombre. "
+                "Los valores se añaden después desde la lista con ➕ Añadir.",
+                chat_id=chat,
+            )
         with SessionLocal() as session:
             if session.scalar(select(Watchlist).where(Watchlist.name == name)):
                 _send(f"Ya existe una lista llamada «{esc(name)}».", chat_id=chat)

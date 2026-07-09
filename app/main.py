@@ -368,4 +368,4 @@ def test_telegram():
 # "v" permite comprobar qué versión hay desplegada.
 @app.api_route("/health", methods=["GET", "HEAD"])
 def health():
-    return {"status": "ok", "v": 5}
+    return {"status": "ok", "v": 6}
