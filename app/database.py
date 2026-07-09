@@ -119,3 +119,12 @@ def set_setting(session, key: str, value: str) -> None:
 
 def get_move_threshold(session) -> float:
     return float(get_setting(session, "move_threshold", str(config.DEFAULT_MOVE_THRESHOLD)))
+
+
+def get_refresh_seconds(session) -> int:
+    """Cada cuántos segundos refresca precios la web (mínimo 5)."""
+    try:
+        value = int(float(get_setting(session, "ui_refresh_seconds", "10")))
+    except ValueError:
+        value = 10
+    return max(5, value)

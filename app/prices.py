@@ -5,6 +5,7 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+import httpx
 import yfinance as yf
 
 log = logging.getLogger(__name__)
@@ -66,6 +67,42 @@ def lookup_name(ticker: str) -> str:
         return info.get("shortName") or info.get("longName") or ticker.upper()
     except Exception:
         return ticker.upper()
+
+
+def search_symbols(query: str, limit: int = 8) -> list[dict]:
+    """Sugerencias de tickers para el buscador (búsqueda de Yahoo Finance)."""
+    query = query.strip()
+    if len(query) < 2:
+        return []
+    raw: list[dict] = []
+    try:
+        raw = yf.Search(query, max_results=limit).quotes
+    except Exception as exc:
+        log.warning("yf.Search falló (%s); probando API directa", exc)
+        try:
+            resp = httpx.get(
+                "https://query2.finance.yahoo.com/v1/finance/search",
+                params={"q": query, "quotesCount": limit, "newsCount": 0},
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=10,
+            )
+            raw = resp.json().get("quotes", [])
+        except Exception as exc2:
+            log.warning("Búsqueda de '%s' falló: %s", query, exc2)
+    results = []
+    for item in raw:
+        symbol = item.get("symbol")
+        if not symbol:
+            continue
+        results.append(
+            {
+                "symbol": symbol,
+                "name": item.get("shortname") or item.get("longname") or "",
+                "exchange": item.get("exchDisp") or item.get("exchange") or "",
+                "type": item.get("typeDisp") or item.get("quoteType") or "",
+            }
+        )
+    return results[:limit]
 
 
 VALID_RANGES = {"1mo": "1d", "3mo": "1d", "6mo": "1d", "1y": "1d", "5y": "1wk", "max": "1mo"}

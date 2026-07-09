@@ -8,8 +8,8 @@
     <h1>{{ stock.ticker }} <span class="name">{{ stock.name }}</span></h1>
     {% if quote %}
       <div class="price-line">
-        <span class="big-price">{{ quote.price | price(quote.currency) }}</span>
-        <span class="badge {{ 'up' if quote.change_pct >= 0 else 'down' }}">{{ quote.change_pct | pct }} hoy</span>
+        <span class="big-price" id="big-price">{{ quote.price | price(quote.currency) }}</span>
+        <span class="badge {{ 'up' if quote.change_pct >= 0 else 'down' }}" id="big-change">{{ quote.change_pct | pct }} hoy</span>
       </div>
       {% if quote.year_low and quote.year_high %}
       <p class="hint">Rango 52 semanas: {{ quote.year_low | price(quote.currency) }} – {{ quote.year_high | price(quote.currency) }}</p>
@@ -51,8 +51,7 @@
       <div class="flash warn">Telegram no está configurado: las alertas no se enviarán.
         <a href="/settings">Configurar →</a></div>
     {% endif %}
-    <form method="post" action="/alerts/add" class="alert-form">
-      <input type="hidden" name="stock_id" value="{{ stock.id }}">
+    <form id="alert-form" class="alert-form">
       <select name="kind">
         <option value="below">Si baja de</option>
         <option value="above">Si sube de</option>
@@ -60,37 +59,21 @@
       <input type="text" name="threshold" placeholder="precio" required>
       <button type="submit">Crear</button>
     </form>
-    {% if stock.alerts %}
-    <ul class="alert-list">
-      {% for a in stock.alerts | sort(attribute='created_at', reverse=true) %}
-      <li>
-        <span>
-          {{ '⬆️ Sube de' if a.kind == 'above' else '⬇️ Baja de' }}
-          <b>{{ a.threshold | price(stock.currency) }}</b>
-          {% if not a.active %}
-            <span class="badge muted">disparada {{ a.triggered_at.strftime('%d/%m %H:%M') if a.triggered_at }}</span>
-          {% endif %}
-        </span>
-        <span class="alert-actions">
-          {% if not a.active %}
-          <form method="post" action="/alerts/{{ a.id }}/rearm"><button class="small">Reactivar</button></form>
-          {% endif %}
-          <form method="post" action="/alerts/{{ a.id }}/delete"><button class="icon" title="Eliminar">✕</button></form>
-        </span>
-      </li>
-      {% endfor %}
-    </ul>
-    {% else %}
-    <p class="muted">Sin alertas todavía.</p>
-    {% endif %}
+    <p id="alert-msg" class="hint" hidden></p>
+    <ul class="alert-list" id="alert-list"></ul>
+    <p class="muted" id="alert-empty" hidden>Sin alertas todavía.</p>
   </section>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="/static/app.js"></script>
 <script>
   const ticker = {{ stock.ticker | tojson }};
+  const stockId = {{ stock.id }};
+  const currency = {{ stock.currency | tojson }};
   let chart = null;
 
+  // ---------------- gráfico ----------------
   async function loadChart(period) {
     const res = await fetch(`/api/history/${ticker}?period=${period}`);
     const data = await res.json();
@@ -132,5 +115,78 @@
     });
   });
   loadChart('6mo');
+
+  // ---------------- alertas sin recargar ----------------
+  const alertList = document.getElementById('alert-list');
+  const alertEmpty = document.getElementById('alert-empty');
+  const alertMsg = document.getElementById('alert-msg');
+
+  function showAlertMsg(text, isError) {
+    alertMsg.textContent = text;
+    alertMsg.hidden = false;
+    alertMsg.style.color = isError ? 'var(--down)' : 'var(--up)';
+    setTimeout(() => { alertMsg.hidden = true; }, 3000);
+  }
+
+  function renderAlerts(alerts) {
+    alertList.innerHTML = '';
+    alertEmpty.hidden = alerts.length > 0;
+    for (const a of alerts) {
+      const li = document.createElement('li');
+      const info = document.createElement('span');
+      info.innerHTML = (a.kind === 'above' ? '⬆️ Sube de ' : '⬇️ Baja de ') +
+        `<b>${fmtPrice(a.threshold, currency)}</b>`;
+      if (!a.active) {
+        const badge = document.createElement('span');
+        badge.className = 'badge muted';
+        badge.textContent = a.triggered_at ? `disparada ${a.triggered_at}` : 'disparada';
+        info.append(' ', badge);
+      }
+      const actions = document.createElement('span');
+      actions.className = 'alert-actions';
+      if (!a.active) {
+        const rearm = document.createElement('button');
+        rearm.className = 'small';
+        rearm.textContent = 'Reactivar';
+        rearm.addEventListener('click', () => alertAction(`/api/alerts/${a.id}/rearm`, 'Alerta reactivada.'));
+        actions.appendChild(rearm);
+      }
+      const del = document.createElement('button');
+      del.className = 'icon';
+      del.title = 'Eliminar';
+      del.textContent = '✕';
+      del.addEventListener('click', () => alertAction(`/api/alerts/${a.id}/delete`, 'Alerta eliminada.'));
+      actions.appendChild(del);
+      li.append(info, actions);
+      alertList.appendChild(li);
+    }
+  }
+
+  async function alertAction(url, okMsg, body) {
+    try {
+      const res = await fetch(url, { method: 'POST', body });
+      const data = await res.json();
+      if (!data.ok) { showAlertMsg(data.error || 'Error', true); return; }
+      renderAlerts(data.alerts);
+      showAlertMsg(okMsg, false);
+    } catch {
+      showAlertMsg('Sin conexión con el servidor.', true);
+    }
+  }
+
+  document.getElementById('alert-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const body = new FormData(form);
+    body.append('stock_id', stockId);
+    alertAction('/api/alerts', 'Alerta creada.', body).then(() => {
+      form.querySelector('input[name=threshold]').value = '';
+    });
+  });
+
+  renderAlerts({{ alerts_json | tojson }});
+
+  // ---------------- precio en vivo ----------------
+  startLiveQuote(ticker, {{ refresh_seconds }});
 </script>
 {% endblock %}

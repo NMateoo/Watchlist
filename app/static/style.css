@@ -94,7 +94,42 @@ button.small { padding: 4px 10px; font-size: 12.5px; background: var(--surface-2
 /* ---- barra añadir ---- */
 .add-bar { margin-bottom: 24px; }
 .add-bar form { display: flex; gap: 8px; }
-.add-bar input { flex: 1; max-width: 480px; }
+.search-wrap { position: relative; flex: 1; max-width: 480px; }
+.search-wrap input { width: 100%; }
+
+.suggestions {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0; right: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  list-style: none;
+  overflow: hidden;
+  z-index: 20;
+  box-shadow: 0 8px 24px rgba(0,0,0,.45);
+}
+.suggestions li {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 9px 14px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+.suggestions li:last-child { border-bottom: none; }
+.suggestions li:hover { background: var(--surface-2); }
+.suggestions li b { color: var(--accent); min-width: 72px; }
+.suggestions li span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.suggestions li small { color: var(--muted); font-size: 12px; white-space: nowrap; }
+
+/* ---- refresco en vivo ---- */
+@keyframes tick-flash {
+  0% { background: rgba(79,140,255,.35); }
+  100% { background: transparent; }
+}
+.tick { animation: tick-flash 1s ease-out; border-radius: 6px; }
+.refresh-note { margin-top: 10px; }
+.refresh-note a { color: var(--accent); }
 .hint { color: var(--muted); font-size: 13px; margin-top: 6px; }
 code { background: var(--surface-2); padding: 1px 6px; border-radius: 5px; font-size: 12.5px; }
 

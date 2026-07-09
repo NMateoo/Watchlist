@@ -19,6 +19,7 @@ from app.database import (
     SessionLocal,
     Stock,
     get_move_threshold,
+    get_refresh_seconds,
     init_db,
     set_setting,
 )
@@ -59,6 +60,7 @@ def index(request: Request):
     with SessionLocal() as session:
         stocks = session.scalars(select(Stock).order_by(Stock.ticker)).all()
         _ = [s.alerts for s in stocks]  # cargar relación antes de cerrar sesión
+        refresh_seconds = get_refresh_seconds(session)
     quotes = prices.get_quotes([s.ticker for s in stocks])
     return templates.TemplateResponse(
         request,
@@ -67,6 +69,7 @@ def index(request: Request):
             "stocks": stocks,
             "quotes": quotes,
             "telegram_ok": telegram.is_configured(),
+            "refresh_seconds": refresh_seconds,
         },
     )
 
@@ -111,6 +114,20 @@ def delete_stock(stock_id: int):
 # ------------------------------------------------------------- ficha valor
 
 
+def _alerts_json(session, stock_id: int) -> list[dict]:
+    stock = session.get(Stock, stock_id)
+    return [
+        {
+            "id": a.id,
+            "kind": a.kind,
+            "threshold": a.threshold,
+            "active": a.active,
+            "triggered_at": a.triggered_at.strftime("%d/%m %H:%M") if a.triggered_at else None,
+        }
+        for a in sorted(stock.alerts, key=lambda a: a.created_at, reverse=True)
+    ]
+
+
 @app.get("/stocks/{ticker}")
 def stock_detail(request: Request, ticker: str):
     ticker = ticker.upper()
@@ -118,12 +135,19 @@ def stock_detail(request: Request, ticker: str):
         stock = session.scalar(select(Stock).where(Stock.ticker == ticker))
         if not stock:
             return redirect("/", err=f"{ticker} no está en tu watchlist.")
-        _ = stock.alerts
+        alerts_json = _alerts_json(session, stock.id)
+        refresh_seconds = get_refresh_seconds(session)
     quote = prices.get_quote(ticker)
     return templates.TemplateResponse(
         request,
         "stock.html",
-        {"stock": stock, "quote": quote, "telegram_ok": telegram.is_configured()},
+        {
+            "stock": stock,
+            "quote": quote,
+            "alerts_json": alerts_json,
+            "telegram_ok": telegram.is_configured(),
+            "refresh_seconds": refresh_seconds,
+        },
     )
 
 
@@ -147,48 +171,70 @@ def api_history(ticker: str, period: str = "6mo"):
     return JSONResponse(prices.get_history(ticker, period))
 
 
+@app.get("/api/quotes")
+def api_quotes():
+    """Cotizaciones frescas de toda la watchlist, para el refresco en vivo."""
+    with SessionLocal() as session:
+        tickers = list(session.scalars(select(Stock.ticker)))
+        refresh = get_refresh_seconds(session)
+    return prices.get_quotes(tickers, max_age=max(3, refresh - 1))
+
+
+@app.get("/api/quote/{ticker}")
+def api_quote(ticker: str):
+    with SessionLocal() as session:
+        refresh = get_refresh_seconds(session)
+    quote = prices.get_quote(ticker.upper(), max_age=max(3, refresh - 1))
+    return quote or JSONResponse({"error": "sin datos"}, status_code=404)
+
+
+@app.get("/api/search")
+def api_search(q: str = ""):
+    return prices.search_symbols(q)
+
+
 # ----------------------------------------------------------------- alertas
 
 
-@app.post("/alerts/add")
-def add_alert(stock_id: int = Form(...), kind: str = Form(...), threshold: str = Form(...)):
+@app.post("/api/alerts")
+def api_add_alert(stock_id: int = Form(...), kind: str = Form(...), threshold: str = Form(...)):
     if kind not in ("above", "below"):
-        return redirect("/", err="Tipo de alerta no válido.")
+        return JSONResponse({"ok": False, "error": "Tipo de alerta no válido."}, status_code=400)
     with SessionLocal() as session:
         stock = session.get(Stock, stock_id)
         if not stock:
-            return redirect("/", err="Valor no encontrado.")
+            return JSONResponse({"ok": False, "error": "Valor no encontrado."}, status_code=404)
         try:
             value = float(threshold.replace(",", "."))
         except ValueError:
-            return redirect(f"/stocks/{stock.ticker}", err="Umbral no válido.")
+            return JSONResponse({"ok": False, "error": "Umbral no válido."}, status_code=400)
         session.add(Alert(stock_id=stock.id, kind=kind, threshold=value))
         session.commit()
-        return redirect(f"/stocks/{stock.ticker}", msg="Alerta creada.")
+        return {"ok": True, "alerts": _alerts_json(session, stock.id)}
 
 
-@app.post("/alerts/{alert_id}/delete")
-def delete_alert(alert_id: int):
-    with SessionLocal() as session:
-        alert = session.get(Alert, alert_id)
-        ticker = alert.stock.ticker if alert else None
-        if alert:
-            session.delete(alert)
-            session.commit()
-    return redirect(f"/stocks/{ticker}" if ticker else "/", msg="Alerta eliminada.")
-
-
-@app.post("/alerts/{alert_id}/rearm")
-def rearm_alert(alert_id: int):
+@app.post("/api/alerts/{alert_id}/delete")
+def api_delete_alert(alert_id: int):
     with SessionLocal() as session:
         alert = session.get(Alert, alert_id)
         if not alert:
-            return redirect("/", err="Alerta no encontrada.")
+            return JSONResponse({"ok": False, "error": "Alerta no encontrada."}, status_code=404)
+        stock_id = alert.stock_id
+        session.delete(alert)
+        session.commit()
+        return {"ok": True, "alerts": _alerts_json(session, stock_id)}
+
+
+@app.post("/api/alerts/{alert_id}/rearm")
+def api_rearm_alert(alert_id: int):
+    with SessionLocal() as session:
+        alert = session.get(Alert, alert_id)
+        if not alert:
+            return JSONResponse({"ok": False, "error": "Alerta no encontrada."}, status_code=404)
         alert.active = True
         alert.triggered_at = None
-        ticker = alert.stock.ticker
         session.commit()
-    return redirect(f"/stocks/{ticker}", msg="Alerta reactivada.")
+        return {"ok": True, "alerts": _alerts_json(session, alert.stock_id)}
 
 
 # ----------------------------------------------------------------- ajustes
@@ -198,6 +244,7 @@ def rearm_alert(alert_id: int):
 def settings_page(request: Request):
     with SessionLocal() as session:
         move_threshold = get_move_threshold(session)
+        refresh_seconds = get_refresh_seconds(session)
     chat_id_hint = None
     if config.TELEGRAM_BOT_TOKEN and not config.TELEGRAM_CHAT_ID:
         chat_id_hint = telegram.get_chat_id_hint()
@@ -209,6 +256,7 @@ def settings_page(request: Request):
             "has_token": bool(config.TELEGRAM_BOT_TOKEN),
             "chat_id_hint": chat_id_hint,
             "move_threshold": move_threshold,
+            "refresh_seconds": refresh_seconds,
             "check_interval": config.CHECK_INTERVAL_MINUTES,
             "summary_time": config.DAILY_SUMMARY_TIME,
             "timezone": config.TIMEZONE,
@@ -228,6 +276,20 @@ def save_move_threshold(move_threshold: str = Form(...)):
         set_setting(session, "move_threshold", str(value))
         session.commit()
     return redirect("/settings", msg=f"Umbral de cambio brusco: {value}%.")
+
+
+@app.post("/settings/refresh")
+def save_refresh_seconds(refresh_seconds: str = Form(...)):
+    try:
+        value = int(refresh_seconds)
+        if value < 5:
+            raise ValueError
+    except ValueError:
+        return redirect("/settings", err="El intervalo debe ser un número entero de 5 o más segundos.")
+    with SessionLocal() as session:
+        set_setting(session, "ui_refresh_seconds", str(value))
+        session.commit()
+    return redirect("/settings", msg=f"La web actualizará precios cada {value} s.")
 
 
 @app.post("/settings/test-telegram")

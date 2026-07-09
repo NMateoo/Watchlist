@@ -29,6 +29,16 @@
 </section>
 
 <section class="card">
+  <h2>Actualización de precios en la web</h2>
+  <p class="hint">Cada cuántos segundos se refrescan los precios en el dashboard y las fichas (mínimo 5 s).
+     Ojo: intervalos muy cortos con muchas acciones pueden hacer que Yahoo limite las peticiones temporalmente.</p>
+  <form method="post" action="/settings/refresh" class="alert-form">
+    <input type="text" name="refresh_seconds" value="{{ refresh_seconds }}"> segundos
+    <button type="submit">Guardar</button>
+  </form>
+</section>
+
+<section class="card">
   <h2>Cambios bruscos</h2>
   <p class="hint">Te avisamos si un valor sube o baja más de este porcentaje en el día (una vez al día por valor).</p>
   <form method="post" action="/settings/move-threshold" class="alert-form">

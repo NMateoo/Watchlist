@@ -1,13 +1,16 @@
 {% extends "base.html" %}
 {% block content %}
 <section class="add-bar">
-  <form method="post" action="/stocks/add">
-    <input type="text" name="ticker" placeholder="Añadir ticker: AAPL, SAN.MC, BTC-USD…"
-           autocomplete="off" autofocus required>
+  <form method="post" action="/stocks/add" autocomplete="off">
+    <div class="search-wrap">
+      <input type="text" name="ticker" id="ticker-input"
+             placeholder="Buscar: apple, santander, bitcoin…" autofocus required>
+      <ul id="suggestions" class="suggestions" hidden></ul>
+    </div>
     <button type="submit">Añadir</button>
   </form>
-  <p class="hint">Sufijos de Yahoo Finance: <code>.MC</code> Madrid · <code>.DE</code> Alemania ·
-     <code>.PA</code> París · <code>-USD</code> cripto · sin sufijo, EE.UU.</p>
+  <p class="hint">Escribe el nombre o el ticker y elige una sugerencia.
+     Sufijos de Yahoo: <code>.MC</code> Madrid · <code>.DE</code> Alemania · <code>-USD</code> cripto.</p>
 </section>
 
 {% if stocks %}
@@ -27,20 +30,17 @@
   <tbody>
     {% for s in stocks %}
     {% set q = quotes.get(s.ticker) %}
-    <tr>
+    <tr data-ticker="{{ s.ticker }}">
       <td><a class="ticker" href="/stocks/{{ s.ticker }}">{{ s.ticker }}</a></td>
       <td class="name">{{ s.name }}</td>
-      {% if q %}
-        <td class="num">{{ q.price | price(q.currency) }}</td>
-        <td class="num {{ 'up' if q.change_pct >= 0 else 'down' }}">{{ q.change_pct | pct }}</td>
-        <td class="num range">
-          {% if q.year_low and q.year_high %}
-            {{ q.year_low | price(q.currency) }} – {{ q.year_high | price(q.currency) }}
-          {% else %}—{% endif %}
-        </td>
-      {% else %}
-        <td class="num" colspan="3">sin datos</td>
-      {% endif %}
+      <td class="num c-price">{{ q.price | price(q.currency) if q else '—' }}</td>
+      <td class="num c-change {{ ('up' if q.change_pct >= 0 else 'down') if q }}">
+        {{ q.change_pct | pct if q else '—' }}</td>
+      <td class="num range">
+        {% if q and q.year_low and q.year_high %}
+          {{ q.year_low | price(q.currency) }} – {{ q.year_high | price(q.currency) }}
+        {% else %}—{% endif %}
+      </td>
       <td class="num">{{ s.target_price | price(s.currency) if s.target_price else '—' }}</td>
       <td>
         {% set active = s.alerts | selectattr('active') | list | length %}
@@ -57,10 +57,20 @@
     {% endfor %}
   </tbody>
 </table>
+<p class="hint refresh-note">Precios actualizándose cada {{ refresh_seconds }} s
+  (<a href="/settings">cambiar</a>) · <span id="last-update"></span></p>
 {% else %}
 <div class="empty">
-  <p>Tu watchlist está vacía. Añade tu primer valor arriba 👆</p>
-  <p class="hint">Prueba con <code>AAPL</code>, <code>SAN.MC</code> o <code>BTC-USD</code>.</p>
+  <p>Tu watchlist está vacía. Busca tu primer valor arriba 👆</p>
+  <p class="hint">Prueba a escribir <code>apple</code>, <code>santander</code> o <code>bitcoin</code>.</p>
 </div>
 {% endif %}
+
+<script src="/static/app.js"></script>
+<script>
+  setupSearch(document.getElementById('ticker-input'), document.getElementById('suggestions'));
+  {% if stocks %}
+  startLivePrices({{ refresh_seconds }});
+  {% endif %}
+</script>
 {% endblock %}
