@@ -260,6 +260,43 @@ def search_symbols(query: str, limit: int = 8) -> list[dict]:
     return results[:limit]
 
 
+# Caché de noticias: {ticker: (timestamp, lista)}
+_news_cache: dict[str, tuple[float, list[dict]]] = {}
+NEWS_TTL_SECONDS = 600
+
+
+def get_news(ticker: str, limit: int = 5) -> list[dict]:
+    """Últimas noticias del valor: [{title, url, provider, date}]."""
+    ticker = ticker.upper()
+    if is_spot(ticker):
+        ticker = SPOT_FUTURES[ticker]  # noticias del futuro equivalente
+    cached = _news_cache.get(ticker)
+    if cached and time.time() - cached[0] < NEWS_TTL_SECONDS:
+        return cached[1][:limit]
+    try:
+        raw = yf.Ticker(ticker).news or []
+    except Exception as exc:
+        log.warning("Sin noticias de %s: %s", ticker, exc)
+        return cached[1][:limit] if cached else []
+    items = []
+    for entry in raw:
+        # yfinance moderno anida los datos en "content"; el formato viejo es plano.
+        content = entry.get("content") or entry
+        title = content.get("title")
+        url = (
+            (content.get("canonicalUrl") or {}).get("url")
+            or (content.get("clickThroughUrl") or {}).get("url")
+            or entry.get("link")
+        )
+        if not title or not url:
+            continue
+        provider = (content.get("provider") or {}).get("displayName") or entry.get("publisher") or ""
+        date = (content.get("pubDate") or "")[:10]
+        items.append({"title": title, "url": url, "provider": provider, "date": date})
+    _news_cache[ticker] = (time.time(), items)
+    return items[:limit]
+
+
 VALID_RANGES = {"1mo": "1d", "3mo": "1d", "6mo": "1d", "1y": "1d", "5y": "1wk", "max": "1mo"}
 
 

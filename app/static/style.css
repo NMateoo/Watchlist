@@ -232,6 +232,14 @@ code { background: var(--surface-2); padding: 1px 6px; border-radius: 5px; font-
 .alert-list li:last-child { border-bottom: none; }
 .alert-actions { display: flex; gap: 6px; align-items: center; }
 
+/* ---- noticias ---- */
+.news-list { list-style: none; }
+.news-list li { padding: 9px 0; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 2px; }
+.news-list li:last-child { border-bottom: none; }
+.news-list a { color: var(--text); text-decoration: none; font-size: 14.5px; }
+.news-list a:hover { color: var(--accent); }
+.news-list small { color: var(--muted); font-size: 12.5px; }
+
 .steps { margin: 10px 0 10px 20px; font-size: 14px; }
 .steps li { margin-bottom: 6px; }
 ul.plain { list-style: none; font-size: 14px; }

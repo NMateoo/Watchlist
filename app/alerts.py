@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from html import escape as esc
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
@@ -69,7 +70,7 @@ def _check_threshold_alerts(session, stock: Stock, quote: dict) -> None:
             continue
         direction = "por encima de" if alert.kind == "above" else "por debajo de"
         sent = telegram.send_message(
-            f"🔔 <b>{stock.ticker}</b> ({stock.name})\n"
+            f"🔔 <b>{stock.ticker}</b> ({esc(stock.name)})\n"
             f"Ha cruzado {direction} tu umbral de {fmt_price(alert.threshold, quote['currency'])}\n"
             f"Precio actual: <b>{fmt_price(price, quote['currency'])}</b> "
             f"({fmt_pct(quote['change_pct'])} hoy)"
@@ -91,7 +92,7 @@ def _check_big_move(session, stock: Stock, quote: dict, threshold_pct: float, to
         return
     emoji = "📈" if change > 0 else "📉"
     sent = telegram.send_message(
-        f"{emoji} <b>{stock.ticker}</b> ({stock.name})\n"
+        f"{emoji} <b>{stock.ticker}</b> ({esc(stock.name)})\n"
         f"Movimiento brusco hoy: <b>{fmt_pct(change)}</b>\n"
         f"Precio actual: {fmt_price(quote['price'], quote['currency'])}"
     )
@@ -157,7 +158,7 @@ def send_daily_summary() -> None:
         )
         rows = [_summary_line(info, quotes.get(info["ticker"])) for info in ordered]
         total += len(stocks)
-        header = f"<u>{name}</u>\n" if len(groups) > 1 else ""
+        header = f"<u>{esc(name)}</u>\n" if len(groups) > 1 else ""
         sections.append(header + "\n".join(rows))
 
     # pie con estadísticas del conjunto

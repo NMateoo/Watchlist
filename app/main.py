@@ -19,8 +19,10 @@ from app.database import (
     SessionLocal,
     Stock,
     Watchlist,
+    get_check_interval,
     get_move_threshold,
     get_refresh_seconds,
+    get_summary_time,
     init_db,
     set_setting,
 )
@@ -241,6 +243,11 @@ def api_search(q: str = ""):
     return prices.search_symbols(q)
 
 
+@app.get("/api/news/{ticker}")
+def api_news(ticker: str):
+    return prices.get_news(ticker, limit=6)
+
+
 # ----------------------------------------------------------------- alertas
 
 
@@ -356,4 +363,4 @@ def test_telegram():
 # "v" permite comprobar qué versión hay desplegada.
 @app.api_route("/health", methods=["GET", "HEAD"])
 def health():
-    return {"status": "ok", "v": 3}
+    return {"status": "ok", "v": 4}

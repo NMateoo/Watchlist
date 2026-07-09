@@ -39,7 +39,7 @@
                placeholder="ej: 150.00">
       </label>
       <label>Notas
-        <textarea name="notes" rows="6"
+        <textarea name="notes" rows="6" id="notes-area"
           placeholder="Por qué la sigo, tesis de inversión, niveles clave…">{{ stock.notes }}</textarea>
       </label>
       <button type="submit">Guardar</button>
@@ -65,6 +65,11 @@
     <p class="muted" id="alert-empty" hidden>Sin alertas todavía.</p>
   </section>
 </div>
+
+<section class="card">
+  <h2>📰 Noticias</h2>
+  <ul class="news-list" id="news-list"><li class="muted">Cargando…</li></ul>
+</section>
 
 {% endblock %}
 
@@ -193,5 +198,38 @@
   const marketEl = document.getElementById('market-state');
   if (marketEl) setMarketBadge(marketEl, marketEl.dataset.state);
   startLiveQuote(ticker, {{ refresh_seconds }});
+
+  // ---------------- notas: crecer hasta mostrar todo el texto ----------------
+  const notesArea = document.getElementById('notes-area');
+  function fitNotes() {
+    notesArea.style.height = 'auto';
+    notesArea.style.height = Math.min(notesArea.scrollHeight + 4, 600) + 'px';
+  }
+  notesArea.addEventListener('input', fitNotes);
+  fitNotes();
+
+  // ---------------- noticias ----------------
+  (async () => {
+    const list = document.getElementById('news-list');
+    let items = [];
+    try {
+      items = await (await fetch(`/api/news/${encodeURIComponent(ticker)}`)).json();
+    } catch { /* sin red */ }
+    list.innerHTML = '';
+    if (!items.length) {
+      list.innerHTML = '<li class="muted">No hay noticias recientes.</li>';
+      return;
+    }
+    for (const n of items) {
+      const li = document.createElement('li');
+      const a = document.createElement('a');
+      a.href = n.url; a.target = '_blank'; a.rel = 'noopener';
+      a.textContent = n.title;
+      const meta = document.createElement('small');
+      meta.textContent = [n.provider, n.date].filter(Boolean).join(' · ');
+      li.append(a, meta);
+      list.appendChild(li);
+    }
+  })();
 </script>
 {% endblock %}

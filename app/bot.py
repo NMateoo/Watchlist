@@ -9,6 +9,7 @@ import json
 import logging
 import threading
 import time
+from html import escape as esc
 
 import httpx
 from sqlalchemy import select
@@ -146,7 +147,7 @@ def _list_view(list_id: int, message_id: int | None = None) -> None:
         stocks = sorted(wl.stocks, key=lambda s: s.ticker)
         name = wl.name
     quotes = prices.get_quotes([s.ticker for s in stocks])
-    lines = [f"<b>📋 {name}</b>"]
+    lines = [f"<b>📋 {esc(name)}</b>"]
     for stock in stocks:
         q = quotes.get(stock.ticker)
         if q:
@@ -182,7 +183,7 @@ def _stock_view(stock_id: int, message_id: int | None = None) -> None:
             state = "" if a.active else " (disparada)"
             alert_lines.append(f"  {arrow} {_fmt(a.threshold, stock.currency)}{state}")
     q = prices.get_quote(info["ticker"])
-    lines = [f"<b>{info['ticker']}</b> — {info['name']}"]
+    lines = [f"<b>{info['ticker']}</b> — {esc(info['name'])}"]
     if q:
         emoji = "🟢" if q["change_pct"] >= 0 else "🔴"
         lines.append(f"{emoji} <b>{_fmt(q['price'], q['currency'])}</b>  ({alerts_mod.fmt_pct(q['change_pct'])} hoy)")
@@ -194,16 +195,24 @@ def _stock_view(stock_id: int, message_id: int | None = None) -> None:
     if alert_lines:
         lines.append("🔔 Alertas:")
         lines.extend(alert_lines)
+    # Notas completas: dentro de la ficha si caben, en mensajes aparte si no.
+    notes_apart = None
     if info["notes"]:
-        notes = info["notes"][:300] + ("…" if len(info["notes"]) > 300 else "")
-        lines.append(f"📝 {notes}")
+        notes = esc(info["notes"])
+        if sum(len(l) for l in lines) + len(notes) < 3800:
+            lines.append(f"📝 {notes}")
+        else:
+            notes_apart = notes
     keyboard = [
-        [_btn("📈 Gráfico", f"g:{info['ticker']}:6mo"), _btn("🔔 Nueva alerta", f"alnew:{stock_id}")],
-        [_btn("🎯 Objetivo", f"target:{stock_id}"), _btn("📝 Notas", f"notes:{stock_id}")],
-        [_btn("🗑 Quitar", f"sd:{stock_id}")],
+        [_btn("📈 Gráfico", f"g:{info['ticker']}:6mo"), _btn("📰 Noticias", f"n:{info['ticker']}")],
+        [_btn("🔔 Nueva alerta", f"alnew:{stock_id}"), _btn("🎯 Objetivo", f"target:{stock_id}")],
+        [_btn("📝 Notas", f"notes:{stock_id}"), _btn("🗑 Quitar", f"sd:{stock_id}")],
         [_btn("◀️ Volver", f"l:{info['list_id']}"), _btn("🔄 Actualizar", f"s:{stock_id}")],
     ]
     _show("\n".join(filter(None, lines)), keyboard, message_id)
+    if notes_apart:
+        for i in range(0, len(notes_apart), 3500):
+            _send(f"📝 <b>Notas de {info['ticker']}</b>\n{notes_apart[i:i + 3500]}")
 
 
 def _alerts_view(message_id: int | None = None) -> None:
@@ -257,6 +266,19 @@ def _pick_list_keyboard(symbol: str) -> list:
     return rows
 
 
+def _send_news(ticker: str) -> None:
+    ticker = ticker.upper()
+    items = prices.get_news(ticker, 5)
+    if not items:
+        _send(f"No hay noticias recientes de {ticker}.")
+        return
+    lines = [f"📰 <b>Noticias de {ticker}</b>"]
+    for n in items:
+        meta = " · ".join(filter(None, [esc(n["provider"]), n["date"]]))
+        lines.append(f"• <a href=\"{n['url']}\">{esc(n['title'])}</a>\n   <i>{meta}</i>")
+    _send("\n".join(lines))
+
+
 CHART_PERIODS = [("1M", "1mo"), ("6M", "6mo"), ("1A", "1y"), ("5A", "5y"), ("Máx", "max")]
 
 
@@ -295,7 +317,7 @@ def _add_stock(symbol: str, list_id: int, message_id: int | None) -> None:
             select(Stock).where(Stock.ticker == symbol, Stock.watchlist_id == list_id)
         )
         if exists:
-            _send(f"{symbol} ya está en «{wl.name}».")
+            _send(f"{symbol} ya está en «{esc(wl.name)}».")
             _stock_view(exists.id, message_id)
             return
     quote = prices.get_quote(symbol)
@@ -436,6 +458,8 @@ def _handle_callback(update: dict) -> None:
         _send("Escríbeme las notas para este valor (o «quitar» para borrarlas):", [[_btn("Cancelar", f"s:{args[0]}")]])
     elif action == "g":
         _send_chart(args[0], args[1] if len(args) > 1 else "6mo")
+    elif action == "n":
+        _send_news(args[0])
     elif action == "summary":
         alerts_mod.send_daily_summary()
 
@@ -461,7 +485,7 @@ def _handle_pending(text: str) -> bool:
         name = text.strip()[:60]
         with SessionLocal() as session:
             if session.scalar(select(Watchlist).where(Watchlist.name == name)):
-                _send(f"Ya existe una lista llamada «{name}».")
+                _send(f"Ya existe una lista llamada «{esc(name)}».")
             else:
                 session.add(Watchlist(name=name))
                 session.commit()
@@ -568,14 +592,17 @@ def _handle_message(update: dict) -> None:
             aliases = {"1m": "1mo", "3m": "3mo", "6m": "6mo", "1a": "1y", "1y": "1y", "5a": "5y", "5y": "5y", "max": "max"}
             period = aliases.get(pieces[1].lower(), "6mo") if len(pieces) > 1 else "6mo"
             _send_chart(pieces[0], period)
+        elif command == "/noticias" and arg.strip():
+            _send_news(arg.split()[0])
         elif command == "/resumen":
             alerts_mod.send_daily_summary()
-        elif command in ("/ayuda", "/help", "/precio", "/grafico"):
+        elif command in ("/ayuda", "/help", "/precio", "/grafico", "/noticias"):
             _send(
                 "<b>Comandos</b>\n"
                 "/menu — menú principal (todo se hace desde ahí)\n"
                 "/precio TICKER — cotización al momento (ej: /precio AAPL)\n"
                 "/grafico TICKER [1m|3m|6m|1a|5a|max] — gráfico (ej: /grafico XAUUSD 1a)\n"
+                "/noticias TICKER — últimas noticias del valor\n"
                 "/resumen — resumen de tus listas ahora\n"
                 "/ayuda — esta ayuda"
             )
@@ -648,6 +675,7 @@ def _register_commands() -> None:
             {"command": "menu", "description": "Menú principal"},
             {"command": "precio", "description": "Cotización: /precio AAPL"},
             {"command": "grafico", "description": "Gráfico: /grafico AAPL 1a"},
+            {"command": "noticias", "description": "Noticias: /noticias AAPL"},
             {"command": "resumen", "description": "Resumen de tus listas ahora"},
             {"command": "ayuda", "description": "Ayuda"},
         ],
