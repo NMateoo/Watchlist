@@ -5,6 +5,7 @@ configurado en TELEGRAM_CHAT_ID; el resto de chats se ignoran.
 """
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -12,7 +13,7 @@ import time
 import httpx
 from sqlalchemy import select
 
-from app import config, prices, scheduler
+from app import charts, config, prices, scheduler
 from app import alerts as alerts_mod
 from app import telegram
 from app.database import (
@@ -81,6 +82,23 @@ def _edit(message_id: int, text: str, keyboard: list | None = None) -> None:
     # Si el mensaje es viejo y ya no se puede editar, mandamos uno nuevo.
     if not result.get("ok"):
         _send(text, keyboard)
+
+
+def _send_photo(png: bytes, caption: str, keyboard: list | None = None) -> None:
+    data = {"chat_id": config.TELEGRAM_CHAT_ID, "caption": caption, "parse_mode": "HTML"}
+    if keyboard:
+        data["reply_markup"] = json.dumps({"inline_keyboard": keyboard})
+    try:
+        resp = httpx.post(
+            API.format(token=config.TELEGRAM_BOT_TOKEN, method="sendPhoto"),
+            data=data,
+            files={"photo": ("chart.png", png, "image/png")},
+            timeout=60,
+        )
+        if not resp.json().get("ok"):
+            log.warning("sendPhoto: %s", resp.text[:200])
+    except Exception as exc:
+        log.error("sendPhoto: %s", exc)
 
 
 def _btn(text: str, data: str) -> dict:
@@ -180,8 +198,9 @@ def _stock_view(stock_id: int, message_id: int | None = None) -> None:
         notes = info["notes"][:300] + ("…" if len(info["notes"]) > 300 else "")
         lines.append(f"📝 {notes}")
     keyboard = [
-        [_btn("🔔 Nueva alerta", f"alnew:{stock_id}"), _btn("🎯 Objetivo", f"target:{stock_id}")],
-        [_btn("📝 Notas", f"notes:{stock_id}"), _btn("🗑 Quitar", f"sd:{stock_id}")],
+        [_btn("📈 Gráfico", f"g:{info['ticker']}:6mo"), _btn("🔔 Nueva alerta", f"alnew:{stock_id}")],
+        [_btn("🎯 Objetivo", f"target:{stock_id}"), _btn("📝 Notas", f"notes:{stock_id}")],
+        [_btn("🗑 Quitar", f"sd:{stock_id}")],
         [_btn("◀️ Volver", f"l:{info['list_id']}"), _btn("🔄 Actualizar", f"s:{stock_id}")],
     ]
     _show("\n".join(filter(None, lines)), keyboard, message_id)
@@ -236,6 +255,30 @@ def _pick_list_keyboard(symbol: str) -> list:
         rows = [[_btn(f"📋 {wl.name}", f"addto:{symbol}:{wl.id}")] for wl in watchlists]
     rows.append([_btn("Cancelar", "menu")])
     return rows
+
+
+CHART_PERIODS = [("1M", "1mo"), ("6M", "6mo"), ("1A", "1y"), ("5A", "5y"), ("Máx", "max")]
+
+
+def _send_chart(ticker: str, period: str = "6mo") -> None:
+    ticker = ticker.upper()
+    result = charts.render_chart(ticker, period)
+    if not result:
+        _send(f"No hay datos de histórico para {ticker}.")
+        return
+    png, _change = result
+    quote = prices.get_quote(ticker)
+    caption = f"📈 <b>{ticker}</b>"
+    if quote:
+        caption += (
+            f"  {_fmt(quote['price'], quote['currency'])}"
+            f"  ({alerts_mod.fmt_pct(quote['change_pct'])} hoy)"
+        )
+    keyboard = [[
+        _btn(label if p != period else f"· {label} ·", f"g:{ticker}:{p}")
+        for label, p in CHART_PERIODS
+    ]]
+    _send_photo(png, caption, keyboard)
 
 
 # ------------------------------------------------------------ acciones
@@ -391,6 +434,8 @@ def _handle_callback(update: dict) -> None:
     elif action == "notes":
         _pending.update({"action": "notes", "stock_id": int(args[0])})
         _send("Escríbeme las notas para este valor (o «quitar» para borrarlas):", [[_btn("Cancelar", f"s:{args[0]}")]])
+    elif action == "g":
+        _send_chart(args[0], args[1] if len(args) > 1 else "6mo")
     elif action == "summary":
         alerts_mod.send_daily_summary()
 
@@ -518,13 +563,19 @@ def _handle_message(update: dict) -> None:
                 )
             else:
                 _send(f"No encuentro cotización para {arg.strip().upper()}.")
+        elif command == "/grafico" and arg.strip():
+            pieces = arg.split()
+            aliases = {"1m": "1mo", "3m": "3mo", "6m": "6mo", "1a": "1y", "1y": "1y", "5a": "5y", "5y": "5y", "max": "max"}
+            period = aliases.get(pieces[1].lower(), "6mo") if len(pieces) > 1 else "6mo"
+            _send_chart(pieces[0], period)
         elif command == "/resumen":
             alerts_mod.send_daily_summary()
-        elif command in ("/ayuda", "/help", "/precio"):
+        elif command in ("/ayuda", "/help", "/precio", "/grafico"):
             _send(
                 "<b>Comandos</b>\n"
                 "/menu — menú principal (todo se hace desde ahí)\n"
                 "/precio TICKER — cotización al momento (ej: /precio AAPL)\n"
+                "/grafico TICKER [1m|3m|6m|1a|5a|max] — gráfico (ej: /grafico XAUUSD 1a)\n"
                 "/resumen — resumen de tus listas ahora\n"
                 "/ayuda — esta ayuda"
             )
@@ -596,6 +647,7 @@ def _register_commands() -> None:
         commands=[
             {"command": "menu", "description": "Menú principal"},
             {"command": "precio", "description": "Cotización: /precio AAPL"},
+            {"command": "grafico", "description": "Gráfico: /grafico AAPL 1a"},
             {"command": "resumen", "description": "Resumen de tus listas ahora"},
             {"command": "ayuda", "description": "Ayuda"},
         ],

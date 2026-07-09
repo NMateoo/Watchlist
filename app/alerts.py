@@ -100,36 +100,80 @@ def _check_big_move(session, stock: Stock, quote: dict, threshold_pct: float, to
         log.info("Aviso de cambio brusco de %s (%.2f%%)", stock.ticker, change)
 
 
+MARKET_EMOJIS = {"pre": " 🟡", "post": " 🟣", "closed": " ⚪"}
+
+
+def _summary_line(info: dict, quote: dict | None) -> str:
+    if not quote:
+        return f"• <b>{info['ticker']}</b>: sin datos"
+    emoji = "🟢" if quote["change_pct"] >= 0 else "🔴"
+    state = MARKET_EMOJIS.get(quote.get("market_state"), "")
+    line = (
+        f"{emoji} <b>{info['ticker']}</b>  {fmt_price(quote['price'], quote['currency'])}"
+        f"  ({fmt_pct(quote['change_pct'])}){state}"
+    )
+    extras = []
+    if quote.get("year_high"):
+        from_high = (quote["price"] / quote["year_high"] - 1) * 100
+        extras.append(f"máx 52s: {fmt_pct(from_high)}")
+    if info["target"]:
+        to_target = (info["target"] / quote["price"] - 1) * 100
+        extras.append(f"🎯 {fmt_price(info['target'], quote['currency'])} ({fmt_pct(to_target)})")
+    if info["alerts"]:
+        extras.append(f"🔔 {info['alerts']}")
+    if extras:
+        line += "\n      " + " · ".join(extras)
+    return line
+
+
 def send_daily_summary() -> None:
-    """Resumen diario de todas las listas, cada una ordenada por variación."""
+    """Resumen de todas las listas: variación, distancia al máximo de 52
+    semanas, precio objetivo, alertas activas y estado del mercado."""
     with session_scope() as session:
         watchlists = session.scalars(select(Watchlist).order_by(Watchlist.id)).all()
-        groups = [(wl.name, list(wl.stocks)) for wl in watchlists if wl.stocks]
+        groups = []
+        for wl in watchlists:
+            if not wl.stocks:
+                continue
+            stocks = [
+                {
+                    "ticker": s.ticker,
+                    "target": s.target_price,
+                    "alerts": sum(1 for a in s.alerts if a.active),
+                }
+                for s in wl.stocks
+            ]
+            groups.append((wl.name, stocks))
     if not groups:
         return
-    all_tickers = {s.ticker for _, stocks in groups for s in stocks}
+    all_tickers = {s["ticker"] for _, stocks in groups for s in stocks}
     quotes = prices.get_quotes(sorted(all_tickers), max_age=60)
 
     sections = []
     total = 0
     for name, stocks in groups:
-        rows = []
-        for stock in sorted(
-            stocks, key=lambda s: quotes.get(s.ticker, {}).get("change_pct", 0), reverse=True
-        ):
-            quote = quotes.get(stock.ticker)
-            if not quote:
-                rows.append(f"• {stock.ticker}: sin datos")
-                continue
-            emoji = "🟢" if quote["change_pct"] >= 0 else "🔴"
-            rows.append(
-                f"{emoji} <b>{stock.ticker}</b>  {fmt_price(quote['price'], quote['currency'])}"
-                f"  ({fmt_pct(quote['change_pct'])})"
-            )
+        ordered = sorted(
+            stocks, key=lambda s: quotes.get(s["ticker"], {}).get("change_pct", 0), reverse=True
+        )
+        rows = [_summary_line(info, quotes.get(info["ticker"])) for info in ordered]
         total += len(stocks)
         header = f"<u>{name}</u>\n" if len(groups) > 1 else ""
         sections.append(header + "\n".join(rows))
 
+    # pie con estadísticas del conjunto
+    changes = {t: q["change_pct"] for t, q in quotes.items()}
+    footer = ""
+    if changes:
+        ups = sum(1 for c in changes.values() if c >= 0)
+        downs = len(changes) - ups
+        best = max(changes, key=changes.get)
+        worst = min(changes, key=changes.get)
+        footer = (
+            f"\n\n🟢 {ups} suben · 🔴 {downs} bajan\n"
+            f"Mejor: <b>{best}</b> {fmt_pct(changes[best])} · "
+            f"Peor: <b>{worst}</b> {fmt_pct(changes[worst])}"
+        )
+
     stamp = datetime.now(ZoneInfo(config.TIMEZONE)).strftime("%d/%m/%Y %H:%M")
-    telegram.send_message(f"📊 <b>Resumen — {stamp}</b>\n\n" + "\n\n".join(sections))
-    log.info("Resumen diario enviado (%d valores en %d listas)", total, len(groups))
+    telegram.send_message(f"📊 <b>Resumen — {stamp}</b>\n\n" + "\n\n".join(sections) + footer)
+    log.info("Resumen enviado (%d valores en %d listas)", total, len(groups))

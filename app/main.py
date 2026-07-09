@@ -353,6 +353,7 @@ def test_telegram():
 
 
 # UptimeRobot usa HEAD; hay que aceptarlo además de GET.
+# "v" permite comprobar qué versión hay desplegada.
 @app.api_route("/health", methods=["GET", "HEAD"])
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "v": 3}

@@ -8,3 +8,4 @@ httpx>=0.27
 python-dotenv>=1.0
 sqlalchemy>=2.0
 psycopg[binary]>=3.2
+matplotlib>=3.10
