@@ -120,7 +120,8 @@ button.small { padding: 4px 10px; font-size: 12.5px; background: var(--surface-2
 
 /* ---- barra añadir ---- */
 .add-bar { margin-bottom: 24px; }
-.add-bar form { display: flex; gap: 8px; }
+.add-bar form { display: flex; gap: 8px; flex-wrap: wrap; }
+.add-bar form > button { flex-shrink: 0; }
 .search-wrap { position: relative; flex: 1; max-width: 480px; }
 .search-wrap input { width: 100%; }
 
@@ -161,15 +162,36 @@ button.small { padding: 4px 10px; font-size: 12.5px; background: var(--surface-2
 code { background: var(--surface-2); padding: 1px 6px; border-radius: 5px; font-size: 12.5px; }
 
 /* ---- tabla watchlist ---- */
+.table-wrap { overflow-x: auto; border-radius: 12px; }
 .watchlist { width: 100%; border-collapse: collapse; background: var(--surface); border-radius: 12px; overflow: hidden; }
-.watchlist th, .watchlist td { padding: 11px 14px; text-align: left; }
+.watchlist th, .watchlist td { padding: 11px 14px; text-align: left; white-space: nowrap; }
 .watchlist th { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); border-bottom: 1px solid var(--border); }
 .watchlist tbody tr { border-bottom: 1px solid var(--border); }
 .watchlist tbody tr:last-child { border-bottom: none; }
 .watchlist tbody tr:hover { background: var(--surface-2); }
 .watchlist .num { text-align: right; font-variant-numeric: tabular-nums; }
-.watchlist .name { color: var(--muted); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.watchlist .name { color: var(--muted); max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 .watchlist .range { font-size: 13px; color: var(--muted); }
+
+/* Columnas menos importantes desaparecen al estrechar la ventana */
+@media (max-width: 900px) { .col-range { display: none; } }
+@media (max-width: 720px) { .col-target, .col-alerts { display: none; } }
+@media (max-width: 560px) {
+  .col-name { display: none; }
+  .watchlist th, .watchlist td { padding: 9px 8px; }
+  main { padding: 16px 8px 48px; }
+}
+
+/* ---- flechas de tick (sube/baja desde la última actualización) ---- */
+.p-arrow { display: inline-block; width: 1em; margin-left: 4px; font-size: 11px; }
+.p-arrow.big { font-size: 16px; margin-left: 6px; }
+.p-arrow.up { color: var(--up); }
+.p-arrow.down { color: var(--down); }
+
+/* ---- formulario inline de nueva lista ---- */
+.new-list-inline { display: flex; gap: 6px; align-items: center; }
+.new-list-inline[hidden] { display: none; }
+.new-list-inline input { width: 180px; padding: 6px 10px; font-size: 13.5px; }
 .ticker { color: var(--accent); font-weight: 700; text-decoration: none; }
 .ticker:hover { text-decoration: underline; }
 .up { color: var(--up); }
@@ -180,7 +202,7 @@ code { background: var(--surface-2); padding: 1px 6px; border-radius: 5px; font-
 
 /* ---- ficha valor ---- */
 .stock-head { margin-bottom: 20px; }
-.price-line { display: flex; align-items: center; gap: 12px; margin: 6px 0; }
+.price-line { display: flex; align-items: center; gap: 12px; margin: 6px 0; flex-wrap: wrap; }
 .big-price { font-size: 32px; font-weight: 700; font-variant-numeric: tabular-nums; }
 
 .card {

@@ -128,6 +128,20 @@ function setupSearch(input, box) {
 
 // ---- precios en vivo: dashboard -----------------------------------------
 
+// Último precio visto por ticker, para pintar la flecha de subida/bajada.
+const lastPrices = {};
+
+function tickArrow(arrowEl, ticker, newPrice) {
+  const prev = lastPrices[ticker];
+  lastPrices[ticker] = newPrice;
+  if (prev === undefined || newPrice === prev || !arrowEl) return prev !== undefined && newPrice !== prev;
+  const up = newPrice > prev;
+  arrowEl.textContent = up ? '▲' : '▼';
+  arrowEl.classList.toggle('up', up);
+  arrowEl.classList.toggle('down', !up);
+  return true;
+}
+
 function startLivePrices(intervalSeconds) {
   async function refresh() {
     let quotes;
@@ -140,11 +154,9 @@ function startLivePrices(intervalSeconds) {
       if (!q) continue;
       const priceCell = row.querySelector('.c-price');
       const changeCell = row.querySelector('.c-change');
-      const newPrice = fmtPrice(q.price, q.currency);
-      if (priceCell.textContent.trim() !== newPrice) {
-        priceCell.textContent = newPrice;
-        flashCell(priceCell);
-      }
+      const changed = tickArrow(priceCell.querySelector('.p-arrow'), row.dataset.ticker, q.price);
+      priceCell.querySelector('.p-val').textContent = fmtPrice(q.price, q.currency);
+      if (changed) flashCell(priceCell);
       changeCell.textContent = fmtPct(q.change_pct);
       changeCell.classList.toggle('up', q.change_pct >= 0);
       changeCell.classList.toggle('down', q.change_pct < 0);
@@ -170,11 +182,9 @@ function startLiveQuote(ticker, intervalSeconds) {
       if (!res.ok) return;
       q = await res.json();
     } catch { return; }
-    const newPrice = fmtPrice(q.price, q.currency);
-    if (priceEl.textContent.trim() !== newPrice) {
-      priceEl.textContent = newPrice;
-      flashCell(priceEl);
-    }
+    const changed = tickArrow(document.getElementById('big-arrow'), ticker, q.price);
+    priceEl.textContent = fmtPrice(q.price, q.currency);
+    if (changed) flashCell(priceEl);
     if (changeEl) {
       changeEl.textContent = fmtPct(q.change_pct) + ' hoy';
       changeEl.classList.toggle('up', q.change_pct >= 0);

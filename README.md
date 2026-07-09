@@ -4,7 +4,7 @@ Monitoriza tus acciones, ETFs y cripto desde una web y recibe alertas en Telegra
 
 - ⚡ **Precios en vivo** — el dashboard se actualiza solo cada pocos segundos (configurable en Ajustes, mínimo 5 s), incluyendo pre-market y after-hours, con indicador del estado del mercado.
 - 🗂️ **Varias listas de seguimiento** — organiza tus valores en pestañas.
-- 🔎 **Buscador con sugerencias** — escribe "apple", "santander" o "gold" y elige el ticker. Incluye materias primas (futuros: `GC=F` oro, `CL=F` petróleo).
+- 🔎 **Buscador con sugerencias** — escribe "apple", "santander", "oro" o "eurusd" y elige el ticker. Incluye materias primas: metales spot (`XAUUSD`, `XAGUSD`, `XPTUSD`, `XPDUSD`, vía gold-api.com) y futuros (`GC=F`, `CL=F`).
 - 🔔 **Alertas de precio** — te avisa cuando un valor cruza un umbral que definas.
 - ⚡ **Cambios bruscos** — aviso si algo se mueve más de X% en el día (una vez al día por valor).
 - 📊 **Resumen diario** — el estado de toda tu watchlist a la hora que elijas.
@@ -32,6 +32,14 @@ Abre http://localhost:8000
 3. Abre un chat con tu bot y mándale cualquier mensaje ("hola").
 4. Arranca la app y entra en **Ajustes** (`/settings`): te mostrará tu `chat_id`.
 5. Añade `TELEGRAM_CHAT_ID=...` al `.env`, reinicia y pulsa "Enviar mensaje de prueba".
+
+## Usar Postgres de Neon en vez de SQLite
+
+1. Crea el proyecto en [neon.tech](https://neon.tech) y copia el *connection string*.
+2. Ponlo en el `.env`: `DATABASE_URL=postgresql://usuario:contraseña@ep-xxx.neon.tech/neondb?sslmode=require`
+3. (Opcional) Copia tus datos actuales de SQLite:
+   `.venv\Scripts\python scripts\copy_sqlite_to_db.py`
+4. Reinicia la app: las tablas se crean solas al arrancar.
 
 ## Desplegar en Render
 

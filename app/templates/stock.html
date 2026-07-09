@@ -8,7 +8,7 @@
     <h1>{{ stock.ticker }} <span class="name">{{ stock.name }}</span></h1>
     {% if quote %}
       <div class="price-line">
-        <span class="big-price" id="big-price">{{ quote.price | price(quote.currency) }}</span>
+        <span class="big-price" id="big-price">{{ quote.price | price(quote.currency) }}</span><span class="p-arrow big" id="big-arrow"></span>
         <span class="badge {{ 'up' if quote.change_pct >= 0 else 'down' }}" id="big-change">{{ quote.change_pct | pct }} hoy</span>
         <span id="market-state" data-state="{{ quote.market_state }}"></span>
       </div>

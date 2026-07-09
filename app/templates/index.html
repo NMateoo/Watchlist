@@ -5,6 +5,11 @@
     <a class="tab {{ 'active' if wl.id == active_list.id }}" href="/?list={{ wl.id }}">{{ wl.name }}</a>
   {% endfor %}
   <button class="tab new" id="new-list-btn" title="Crear otra lista">＋ Nueva lista</button>
+  <form method="post" action="/lists/add" id="new-list-form" class="new-list-inline" hidden>
+    <input type="text" name="name" placeholder="Nombre de la lista…" maxlength="60" required>
+    <button type="submit" class="small">Crear</button>
+    <button type="button" class="small" id="new-list-cancel">Cancelar</button>
+  </form>
   {% if watchlists | length > 1 %}
   <form method="post" action="/lists/{{ active_list.id }}/delete" class="tab-delete"
         onsubmit="return confirm('¿Eliminar la lista «{{ active_list.name }}» y todo su contenido?')">
@@ -12,9 +17,6 @@
   </form>
   {% endif %}
 </div>
-<form method="post" action="/lists/add" id="new-list-form" hidden>
-  <input type="hidden" name="name">
-</form>
 
 <section class="add-bar">
   <form method="post" action="/stocks/add" autocomplete="off">
@@ -31,17 +33,18 @@
 </section>
 
 {% if stocks %}
+<div class="table-wrap">
 <table class="watchlist">
   <thead>
     <tr>
       <th>Ticker</th>
-      <th>Nombre</th>
+      <th class="col-name">Nombre</th>
       <th>Mercado</th>
       <th class="num">Precio</th>
       <th class="num">Hoy</th>
-      <th class="num">Rango 52 sem.</th>
-      <th class="num">Objetivo</th>
-      <th>Alertas</th>
+      <th class="num col-range">Rango 52 sem.</th>
+      <th class="num col-target">Objetivo</th>
+      <th class="col-alerts">Alertas</th>
       <th></th>
     </tr>
   </thead>
@@ -50,18 +53,18 @@
     {% set q = quotes.get(s.ticker) %}
     <tr data-ticker="{{ s.ticker }}">
       <td><a class="ticker" href="/stocks/{{ s.id }}">{{ s.ticker }}</a></td>
-      <td class="name">{{ s.name }}</td>
+      <td class="name col-name">{{ s.name }}</td>
       <td class="c-market" data-state="{{ q.market_state if q else 'unknown' }}"></td>
-      <td class="num c-price">{{ q.price | price(q.currency) if q else '—' }}</td>
+      <td class="num c-price"><span class="p-val">{{ q.price | price(q.currency) if q else '—' }}</span><span class="p-arrow"></span></td>
       <td class="num c-change {{ ('up' if q.change_pct >= 0 else 'down') if q }}">
         {{ q.change_pct | pct if q else '—' }}</td>
-      <td class="num range">
+      <td class="num range col-range">
         {% if q and q.year_low and q.year_high %}
           {{ q.year_low | price(q.currency) }} – {{ q.year_high | price(q.currency) }}
         {% else %}—{% endif %}
       </td>
-      <td class="num">{{ s.target_price | price(s.currency) if s.target_price else '—' }}</td>
-      <td>
+      <td class="num col-target">{{ s.target_price | price(s.currency) if s.target_price else '—' }}</td>
+      <td class="col-alerts">
         {% set active = s.alerts | selectattr('active') | list | length %}
         {% if active %}<span class="badge ok">{{ active }} activa{{ 's' if active > 1 }}</span>
         {% else %}<span class="muted">—</span>{% endif %}
@@ -74,6 +77,7 @@
     {% endfor %}
   </tbody>
 </table>
+</div>
 <p class="hint refresh-note">Precios actualizándose cada {{ refresh_seconds }} s
   (<a href="/settings">cambiar</a>) · <span id="last-update"></span></p>
 {% else %}
@@ -93,12 +97,16 @@
   startLivePrices({{ refresh_seconds }});
   {% endif %}
 
-  document.getElementById('new-list-btn').addEventListener('click', () => {
-    const name = prompt('Nombre de la nueva lista:');
-    if (!name || !name.trim()) return;
-    const form = document.getElementById('new-list-form');
-    form.elements['name'].value = name.trim();
-    form.submit();
+  const newListBtn = document.getElementById('new-list-btn');
+  const newListForm = document.getElementById('new-list-form');
+  newListBtn.addEventListener('click', () => {
+    newListBtn.hidden = true;
+    newListForm.hidden = false;
+    newListForm.elements['name'].focus();
+  });
+  document.getElementById('new-list-cancel').addEventListener('click', () => {
+    newListForm.hidden = true;
+    newListBtn.hidden = false;
   });
 </script>
 {% endblock %}
