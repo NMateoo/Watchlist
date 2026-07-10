@@ -51,7 +51,7 @@ nav a { color: var(--text); text-decoration: none; }
 nav .brand { font-weight: 700; font-size: 18px; }
 .nav-right { display: flex; gap: 16px; align-items: center; }
 
-main { max-width: 1000px; margin: 0 auto; padding: 24px 16px 64px; }
+main { max-width: 1160px; margin: 0 auto; padding: 24px 16px 64px; }
 
 h1 { font-size: 26px; margin-bottom: 12px; }
 h1 .name { font-size: 16px; font-weight: 400; color: var(--muted); }
@@ -184,7 +184,7 @@ code { background: var(--surface-2); padding: 1px 6px; border-radius: 5px; font-
 /* ---- tabla watchlist ---- */
 .table-wrap { overflow-x: auto; border-radius: 12px; }
 .watchlist { width: 100%; border-collapse: collapse; background: var(--surface); border-radius: 12px; overflow: hidden; }
-.watchlist th, .watchlist td { padding: 11px 14px; text-align: left; white-space: nowrap; }
+.watchlist th, .watchlist td { padding: 10px 12px; text-align: left; white-space: nowrap; vertical-align: middle; }
 .watchlist th { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); border-bottom: 1px solid var(--border); }
 .watchlist tbody tr { border-bottom: 1px solid var(--border); }
 .watchlist tbody tr:last-child { border-bottom: none; }

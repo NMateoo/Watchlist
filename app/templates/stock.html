@@ -95,7 +95,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/vendor/chart.umd.min.js"></script>
+<script src="/static/vendor/chart.umd.min.js?v={{ asset_v }}"></script>
 <script>
   const ticker = {{ stock.ticker | tojson }};
   const stockId = {{ stock.id }};

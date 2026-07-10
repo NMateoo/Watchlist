@@ -46,11 +46,17 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Watchlist", lifespan=lifespan)
 
+# Versión de la release: se expone en /health (para saber qué hay desplegado) y
+# versiona las URLs de los estáticos (?v=N) para que el navegador no use un
+# app.js/style.css viejo de su caché tras un deploy. Subirla en cada release.
+APP_VERSION = 14
+
 BASE_DIR = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 templates.env.filters["price"] = alerts_mod.fmt_price
 templates.env.filters["pct"] = alerts_mod.fmt_pct
+templates.env.globals["asset_v"] = APP_VERSION
 
 
 def redirect(url: str, msg: str = "", err: str = "") -> RedirectResponse:
@@ -488,4 +494,4 @@ def health():
             {"id": j.id, "next": j.next_run_time.strftime("%d %H:%M:%S") if j.next_run_time else None}
             for j in scheduler.scheduler.get_jobs()
         ]
-    return {"status": "ok", "v": 13, "scheduler": scheduler.scheduler.running, "jobs": jobs}
+    return {"status": "ok", "v": APP_VERSION, "scheduler": scheduler.scheduler.running, "jobs": jobs}

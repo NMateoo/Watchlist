@@ -98,7 +98,7 @@
       <td class="num c-price"><span class="p-val">{{ q.price | price(q.currency) if q else '—' }}</span><span class="p-arrow"></span></td>
       <td class="num c-change {{ ('up' if q.change_pct >= 0 else 'down') if q }}">
         {{ q.change_pct | pct if q else '—' }}</td>
-      <td class="col-spark"><svg class="spark" data-ticker="{{ s.ticker }}"></svg></td>
+      <td class="col-spark"><svg class="spark" width="72" height="26" data-ticker="{{ s.ticker }}"></svg></td>
       <td class="num range col-range">
         {% if q and q.year_low and q.year_high %}
           {{ q.year_low | price(q.currency) }} – {{ q.year_high | price(q.currency) }}
