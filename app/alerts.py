@@ -41,10 +41,10 @@ def _local_today() -> str:
     return datetime.now(ZoneInfo(config.TIMEZONE)).strftime("%Y-%m-%d")
 
 
-def _owner_chat(stock: Stock) -> str | None:
-    """Chat del dueño de la lista del valor (None → chat del admin)."""
-    owner = stock.watchlist.owner if stock.watchlist else None
-    return owner.chat_id if owner else None
+def _recipient_chats(stock: Stock) -> list[str | None]:
+    """Chats de los miembros de la lista del valor; sin miembros → admin (None)."""
+    members = stock.watchlist.members if stock.watchlist else []
+    return [m.chat_id for m in members] or [None]
 
 
 def check_alerts() -> None:
@@ -76,13 +76,13 @@ def _check_threshold_alerts(session, stock: Stock, quote: dict) -> None:
         if not crossed:
             continue
         direction = "por encima de" if alert.kind == "above" else "por debajo de"
-        sent = telegram.send_message(
+        text = (
             f"🔔 <b>{stock.ticker}</b> ({esc(stock.name)})\n"
-            f"Ha cruzado {direction} tu umbral de {fmt_price(alert.threshold, quote['currency'])}\n"
+            f"Ha cruzado {direction} el umbral de {fmt_price(alert.threshold, quote['currency'])}\n"
             f"Precio actual: <b>{fmt_price(price, quote['currency'])}</b> "
-            f"({fmt_pct(quote['change_pct'])} hoy)",
-            chat_id=_owner_chat(stock),
+            f"({fmt_pct(quote['change_pct'])} hoy)"
         )
+        sent = any([telegram.send_message(text, chat_id=chat) for chat in _recipient_chats(stock)])
         if sent:
             alert.active = False
             alert.triggered_at = utcnow()
@@ -93,26 +93,26 @@ def _check_big_move(session, stock: Stock, quote: dict, threshold_pct: float, to
     change = quote["change_pct"]
     if abs(change) < threshold_pct:
         return
-    chat = _owner_chat(stock)
-    already = session.scalar(
-        select(MoveNotice).where(
-            MoveNotice.ticker == stock.ticker,
-            MoveNotice.day == today,
-            MoveNotice.chat_id == chat,
+    for chat in _recipient_chats(stock):
+        already = session.scalar(
+            select(MoveNotice).where(
+                MoveNotice.ticker == stock.ticker,
+                MoveNotice.day == today,
+                MoveNotice.chat_id == chat,
+            )
         )
-    )
-    if already:
-        return
-    emoji = "📈" if change > 0 else "📉"
-    sent = telegram.send_message(
-        f"{emoji} <b>{stock.ticker}</b> ({esc(stock.name)})\n"
-        f"Movimiento brusco hoy: <b>{fmt_pct(change)}</b>\n"
-        f"Precio actual: {fmt_price(quote['price'], quote['currency'])}",
-        chat_id=chat,
-    )
-    if sent:
-        session.add(MoveNotice(ticker=stock.ticker, day=today, chat_id=chat, pct=change))
-        log.info("Aviso de cambio brusco de %s (%.2f%%)", stock.ticker, change)
+        if already:
+            continue
+        emoji = "📈" if change > 0 else "📉"
+        sent = telegram.send_message(
+            f"{emoji} <b>{stock.ticker}</b> ({esc(stock.name)})\n"
+            f"Movimiento brusco hoy: <b>{fmt_pct(change)}</b>\n"
+            f"Precio actual: {fmt_price(quote['price'], quote['currency'])}",
+            chat_id=chat,
+        )
+        if sent:
+            session.add(MoveNotice(ticker=stock.ticker, day=today, chat_id=chat, pct=change))
+            log.info("Aviso de cambio brusco de %s (%.2f%%) a %s", stock.ticker, change, chat or "admin")
 
 
 MARKET_EMOJIS = {"pre": " 🟡", "post": " 🟣", "closed": " ⚪"}
@@ -142,13 +142,19 @@ def _summary_line(info: dict, quote: dict | None) -> str:
 
 
 def send_summary_to(chat_id: str | None) -> bool:
-    """Resumen de las listas de un usuario: variación, distancia al máximo de
-    52 semanas, precio objetivo, alertas activas y estado del mercado."""
+    """Resumen de las listas de un usuario (el admin recibe TODAS las listas):
+    variación, distancia al máximo de 52 semanas, objetivo, alertas y mercado."""
     with session_scope() as session:
-        query = select(Watchlist).order_by(Watchlist.id)
+        user = None
         if chat_id is not None:
-            query = query.join(BotUser).where(BotUser.chat_id == str(chat_id))
-        watchlists = session.scalars(query).all()
+            user = session.scalar(select(BotUser).where(BotUser.chat_id == str(chat_id)))
+            if not user:
+                return False
+        if user is None or user.role == "admin":
+            watchlists = session.scalars(select(Watchlist).order_by(Watchlist.id)).all()
+        else:
+            watchlists = sorted(user.shared_lists, key=lambda w: w.id)
+        is_admin = user is None or user.role == "admin"
         groups = []
         for wl in watchlists:
             if not wl.stocks:
@@ -161,7 +167,10 @@ def send_summary_to(chat_id: str | None) -> bool:
                 }
                 for s in wl.stocks
             ]
-            groups.append((wl.name, stocks))
+            label = wl.name
+            if is_admin and wl.members:
+                label += " · " + ", ".join(m.name for m in wl.members)
+            groups.append((label, stocks))
     if not groups:
         return False
     all_tickers = {s["ticker"] for _, stocks in groups for s in stocks}

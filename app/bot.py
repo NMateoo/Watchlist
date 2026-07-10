@@ -187,10 +187,10 @@ def _main_menu(ctx: dict, message_id: int | None = None) -> None:
 
 
 def _user_lists(session, ctx: dict):
-    query = select(Watchlist).order_by(Watchlist.id)
-    if not _is_admin(ctx):
-        query = query.where(Watchlist.owner_id == ctx["uid"])
-    return session.scalars(query).all()
+    if _is_admin(ctx):
+        return session.scalars(select(Watchlist).order_by(Watchlist.id)).all()
+    user = session.get(BotUser, ctx["uid"])
+    return sorted(user.shared_lists, key=lambda w: w.id) if user else []
 
 
 def _lists_view(ctx: dict, message_id: int | None = None) -> None:
@@ -199,20 +199,22 @@ def _lists_view(ctx: dict, message_id: int | None = None) -> None:
         rows = []
         for wl in watchlists:
             label = f"📋 {wl.name} ({len(wl.stocks)})"
-            if _is_admin(ctx) and wl.owner and wl.owner.role != "admin":
-                label += f" · {wl.owner.name}"
-            rows.append([_btn(label, f"l:{wl.id}")])
+            if _is_admin(ctx) and wl.members:
+                label += " · " + ", ".join(m.name for m in wl.members)
+            rows.append([_btn(label[:60], f"l:{wl.id}")])
     rows.append([_btn("➕ Nueva lista", "lnew"), _btn("◀️ Menú", "menu")])
     if watchlists:
         text = "<b>Tus listas</b>"
     else:
-        text = ("No tienes listas todavía. Pídele al administrador que te asigne "
+        text = ("No tienes listas todavía. Pídele al administrador que te comparta "
                 "una, o crea la tuya con ➕ Nueva lista.")
     _show(ctx, text, rows, message_id)
 
 
 def _can_touch_list(ctx: dict, wl: Watchlist | None) -> bool:
-    return wl is not None and (_is_admin(ctx) or wl.owner_id == ctx["uid"])
+    return wl is not None and (
+        _is_admin(ctx) or any(m.id == ctx["uid"] for m in wl.members)
+    )
 
 
 def _list_view(ctx: dict, list_id: int, message_id: int | None = None) -> None:
@@ -223,12 +225,12 @@ def _list_view(ctx: dict, list_id: int, message_id: int | None = None) -> None:
             return
         stocks = sorted(wl.stocks, key=lambda s: s.ticker)
         name = wl.name
-        owner_name = wl.owner.name if wl.owner and wl.owner.role != "admin" else None
+        member_names = ", ".join(m.name for m in wl.members)
         has_users = bool(session.scalar(select(BotUser).where(BotUser.role == "user")))
     quotes = prices.get_quotes([s.ticker for s in stocks])
     lines = [f"<b>📋 {esc(name)}</b>"]
-    if _is_admin(ctx) and owner_name:
-        lines.append(f"👤 Asignada a {esc(owner_name)}")
+    if _is_admin(ctx) and member_names:
+        lines.append(f"👥 Compartida con {esc(member_names)}")
     for stock in stocks:
         q = quotes.get(stock.ticker)
         if q:
@@ -244,7 +246,7 @@ def _list_view(ctx: dict, list_id: int, message_id: int | None = None) -> None:
     rows = [[_btn(s.ticker, f"s:{s.id}")] for s in stocks]
     action_row = [_btn("➕ Añadir aquí", f"addl:{list_id}"), _btn("🗑 Eliminar lista", f"ldel:{list_id}")]
     if _is_admin(ctx) and has_users:
-        action_row.insert(1, _btn("👤 Asignar", f"lasg:{list_id}"))
+        action_row.insert(1, _btn("👥 Compartir", f"lasg:{list_id}"))
     rows.append(action_row)
     rows.append([_btn("◀️ Listas", "lists"), _btn("🔄 Actualizar", f"l:{list_id}")])
     _show(ctx, "\n".join(lines), rows, message_id)
@@ -368,7 +370,7 @@ def _users_view(ctx: dict, message_id: int | None = None) -> None:
             if u.role == "admin":
                 lines.append(f"👑 {esc(u.name)} (tú)")
             elif u.role == "user":
-                lists = len(u.watchlists)
+                lists = len(u.shared_lists)
                 lines.append(f"👤 {esc(u.name)} — {lists} lista{'s' if lists != 1 else ''}")
                 rows.append([_btn(f"🗑 Quitar a {u.name[:20]}", f"udel:{u.id}")])
             else:
@@ -378,6 +380,30 @@ def _users_view(ctx: dict, message_id: int | None = None) -> None:
                  "cuando escriba te llegará su solicitud.")
     rows.append([_btn("◀️ Menú", "menu")])
     _show(ctx, "\n".join(lines), rows, message_id)
+
+
+def _share_view(ctx: dict, list_id: int, message_id: int | None) -> None:
+    """Compartir una lista: toca un usuario para añadirlo o quitarlo."""
+    with SessionLocal() as session:
+        wl = session.get(Watchlist, list_id)
+        if not wl:
+            _lists_view(ctx, message_id)
+            return
+        users = session.scalars(select(BotUser).where(BotUser.role == "user")).all()
+        member_ids = {m.id for m in wl.members}
+        rows = [
+            [_btn(("✅ " if u.id in member_ids else "▫️ ") + u.name, f"lasgto:{list_id}:{u.id}")]
+            for u in users
+        ]
+        name = wl.name
+    rows.append([_btn("✔️ Listo", f"l:{list_id}")])
+    _show(
+        ctx,
+        f"👥 <b>Compartir «{esc(name)}»</b>\nToca un usuario para añadirlo o quitarlo. "
+        "Tú (admin) siempre ves todas las listas.",
+        rows,
+        message_id,
+    )
 
 
 def _pick_list_keyboard(session, ctx: dict, symbol: str) -> list:
@@ -518,26 +544,24 @@ def _handle_callback(update: dict) -> None:
                 session.commit()
         _lists_view(ctx, message_id)
     elif action == "lasg":
-        with SessionLocal() as session:
-            users = session.scalars(select(BotUser).where(BotUser.role.in_(("admin", "user")))).all()
-            rows = [[_btn(f"👤 {u.name}" + (" (tú)" if u.role == "admin" else ""), f"lasgto:{args[0]}:{u.id}")]
-                    for u in users]
-        rows.append([_btn("Cancelar", f"l:{args[0]}")])
-        _edit(ctx["chat"], message_id, "¿A quién asigno esta lista?", rows)
+        _share_view(ctx, int(args[0]), message_id)
     elif action == "lasgto":
         list_id, uid = int(args[0]), int(args[1])
         with SessionLocal() as session:
             wl = session.get(Watchlist, list_id)
             user = session.get(BotUser, uid)
-            if wl and user:
-                wl.owner_id = uid
-                session.commit()
-                if user.role != "admin":
+            if wl and user and user.role == "user":
+                if any(m.id == uid for m in wl.members):
+                    wl.members = [m for m in wl.members if m.id != uid]
+                else:
+                    wl.members.append(user)
                     _send(
-                        f"📬 Te han asignado la lista «{esc(wl.name)}». Escribe /menu para verla.",
+                        f"📬 Te han compartido la lista «{esc(wl.name)}». Escribe /menu para verla.",
                         chat_id=user.chat_id,
                     )
-        _list_view(ctx, list_id, message_id)
+                session.commit()
+        scheduler.reschedule()
+        _share_view(ctx, list_id, message_id)
     elif action == "s":
         _stock_view(ctx, int(args[0]), message_id)
     elif action == "sd":
@@ -633,6 +657,7 @@ def _handle_callback(update: dict) -> None:
                 admin = session.scalar(select(BotUser).where(BotUser.role == "admin"))
                 for wl in user.watchlists:
                     wl.owner_id = admin.id
+                user.shared_lists.clear()
                 session.delete(user)
                 session.commit()
         scheduler.reschedule()  # retirar los jobs de resumen del usuario
@@ -698,7 +723,11 @@ def _handle_pending(ctx: dict, text: str) -> bool:
             if session.scalar(select(Watchlist).where(Watchlist.name == name)):
                 _send(f"Ya existe una lista llamada «{esc(name)}».", chat_id=chat)
             else:
-                session.add(Watchlist(name=name, owner_id=ctx["uid"]))
+                wl = Watchlist(name=name, owner_id=ctx["uid"])
+                if not _is_admin(ctx):
+                    user = session.get(BotUser, ctx["uid"])
+                    wl.members.append(user)  # quien la crea la ve
+                session.add(wl)
                 session.commit()
         _lists_view(ctx)
     elif action == "alert_price":

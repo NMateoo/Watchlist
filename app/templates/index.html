@@ -18,6 +18,26 @@
   {% endif %}
 </div>
 
+{% if has_users %}
+<div class="share-bar">
+  <span class="hint">👥 Compartida con:</span>
+  {% for m in members %}
+  <form method="post" action="/lists/{{ active_list.id }}/members/{{ m.id }}/remove"
+        class="chip-form" onsubmit="return confirm('¿Quitar a {{ m.name }} de esta lista?')">
+    <button class="chip" title="Quitar de la lista">{{ m.name }} ✕</button>
+  </form>
+  {% else %}<span class="muted">nadie (solo tú)</span>{% endfor %}
+  {% if available_users %}
+  <form method="post" action="/lists/{{ active_list.id }}/members/add" class="chip-form">
+    <select name="user_id">
+      {% for u in available_users %}<option value="{{ u.id }}">{{ u.name }}</option>{% endfor %}
+    </select>
+    <button class="small">Compartir</button>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
+
 <section class="add-bar">
   <form method="post" action="/stocks/add" autocomplete="off">
     <input type="hidden" name="watchlist_id" value="{{ active_list.id }}">

@@ -71,6 +71,9 @@ def start() -> None:
         max_instances=1,
         coalesce=True,
     )
+    # Re-sincronizar cada 15 min: recoge altas/bajas de usuarios o cambios de
+    # preferencias hechos desde otra instancia (p. ej. la web en local).
+    scheduler.add_job(_sync_user_summaries, "interval", minutes=15, id="sync_summaries")
     scheduler.start()
     _sync_user_summaries()
     log.info("Scheduler iniciado: alertas cada %d min (%s)", interval, config.TIMEZONE)

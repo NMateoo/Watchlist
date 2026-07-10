@@ -6,11 +6,13 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     Boolean,
+    Column,
     DateTime,
     Float,
     ForeignKey,
     Index,
     String,
+    Table,
     Text,
     create_engine,
     inspect,
@@ -39,6 +41,15 @@ class Base(DeclarativeBase):
     pass
 
 
+# Qué usuarios comparten cada lista (el admin ve todas sin necesidad de fila).
+watchlist_members = Table(
+    "watchlist_members",
+    Base.metadata,
+    Column("watchlist_id", ForeignKey("watchlists.id", ondelete="CASCADE"), primary_key=True),
+    Column("user_id", ForeignKey("bot_users.id", ondelete="CASCADE"), primary_key=True),
+)
+
+
 class BotUser(Base):
     """Usuario del bot de Telegram. El primero (chat de TELEGRAM_CHAT_ID) es admin."""
 
@@ -54,6 +65,9 @@ class BotUser(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     watchlists: Mapped[list["Watchlist"]] = relationship(back_populates="owner")
+    shared_lists: Mapped[list["Watchlist"]] = relationship(
+        secondary=watchlist_members, back_populates="members"
+    )
 
 
 class Watchlist(Base):
@@ -65,6 +79,9 @@ class Watchlist(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     owner: Mapped[BotUser | None] = relationship(back_populates="watchlists")
+    members: Mapped[list[BotUser]] = relationship(
+        secondary=watchlist_members, back_populates="shared_lists"
+    )
     stocks: Mapped[list["Stock"]] = relationship(
         back_populates="watchlist", cascade="all, delete-orphan"
     )
@@ -143,6 +160,8 @@ def init_db() -> None:
     needs_prefs = inspector.has_table("bot_users") and "summary_interval" not in [
         c["name"] for c in inspector.get_columns("bot_users")
     ]
+    # Migración v4 → v5: listas compartidas con varios usuarios.
+    needs_members = inspector.has_table("watchlists") and not inspector.has_table("watchlist_members")
     Base.metadata.create_all(engine)
     if needs_v2:
         with engine.begin() as conn:
@@ -166,6 +185,14 @@ def init_db() -> None:
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE bot_users ADD COLUMN summary_interval INTEGER"))
             conn.execute(text("ALTER TABLE bot_users ADD COLUMN summary_time VARCHAR(5)"))
+    if needs_members:
+        # Las asignaciones antiguas (owner) pasan a ser membresías.
+        with engine.begin() as conn:
+            conn.execute(text(
+                "INSERT INTO watchlist_members (watchlist_id, user_id) "
+                "SELECT w.id, w.owner_id FROM watchlists w "
+                "JOIN bot_users u ON u.id = w.owner_id WHERE u.role != 'admin'"
+            ))
 
 
 def ensure_admin() -> None:

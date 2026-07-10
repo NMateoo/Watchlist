@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Usuarios — Watchlist{% endblock %}
+{% block content %}
+<a href="/" class="back">← Volver</a>
+<h1>👥 Usuarios del bot</h1>
+<p class="hint">Para invitar a alguien: pásale el enlace del bot de Telegram; cuando le escriba,
+   aparecerá aquí (y te llegará un aviso al chat) para que lo apruebes.</p>
+
+<table class="watchlist">
+  <thead>
+    <tr>
+      <th>Nombre</th>
+      <th>Rol</th>
+      <th>Listas compartidas</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for u in users %}
+    <tr>
+      <td>{{ u.name }}</td>
+      <td>
+        {% if u.role == 'admin' %}<span class="badge ok">👑 Admin</span>
+        {% elif u.role == 'user' %}<span class="badge ok">Usuario</span>
+        {% else %}<span class="badge warn">⏳ Pendiente</span>{% endif %}
+      </td>
+      <td class="name">{{ u.lists or '—' }}</td>
+      <td>
+        {% if u.role == 'pending' %}
+          <form method="post" action="/users/{{ u.id }}/approve" style="display:inline">
+            <button class="small">✅ Aprobar</button>
+          </form>
+          <form method="post" action="/users/{{ u.id }}/delete" style="display:inline"
+                onsubmit="return confirm('¿Rechazar la solicitud de {{ u.name }}?')">
+            <button class="icon" title="Rechazar">✕</button>
+          </form>
+        {% elif u.role == 'user' %}
+          <form method="post" action="/users/{{ u.id }}/delete"
+                onsubmit="return confirm('¿Quitar el acceso a {{ u.name }}?')">
+            <button class="icon" title="Quitar acceso">✕</button>
+          </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

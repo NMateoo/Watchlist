@@ -78,6 +78,13 @@ def index(request: Request, list_id: int | None = Query(None, alias="list")):
             select(Stock).where(Stock.watchlist_id == active.id).order_by(Stock.ticker)
         ).all()
         _ = [s.alerts for s in stocks]  # cargar relación antes de cerrar sesión
+        members = list(active.members)
+        member_ids = {m.id for m in members}
+        available_users = [
+            u for u in session.scalars(select(BotUser).where(BotUser.role == "user"))
+            if u.id not in member_ids
+        ]
+        has_users = bool(members or available_users)
         refresh_seconds = get_refresh_seconds(session)
     quotes = prices.get_quotes([s.ticker for s in stocks])
     return templates.TemplateResponse(
@@ -88,6 +95,9 @@ def index(request: Request, list_id: int | None = Query(None, alias="list")):
             "quotes": quotes,
             "watchlists": watchlists,
             "active_list": active,
+            "members": members,
+            "available_users": available_users,
+            "has_users": has_users,
             "telegram_ok": telegram.is_configured(),
             "refresh_seconds": refresh_seconds,
         },
@@ -161,9 +171,94 @@ def delete_list(list_id: int):
     with SessionLocal() as session:
         wl = session.get(Watchlist, list_id)
         if wl:
+            wl.members.clear()
             session.delete(wl)
             session.commit()
     return redirect("/", msg="Lista eliminada.")
+
+
+@app.post("/lists/{list_id}/members/add")
+def add_member(list_id: int, user_id: int = Form(...)):
+    with SessionLocal() as session:
+        wl = session.get(Watchlist, list_id)
+        user = session.get(BotUser, user_id)
+        if not wl or not user or user.role != "user":
+            return redirect("/", err="Lista o usuario no válidos.")
+        if not any(m.id == user.id for m in wl.members):
+            wl.members.append(user)
+            session.commit()
+            telegram.send_message(
+                f"📬 Te han compartido la lista «{wl.name}». Escribe /menu para verla.",
+                chat_id=user.chat_id,
+            )
+        name = user.name
+    scheduler.reschedule()
+    return redirect(f"/?list={list_id}", msg=f"Lista compartida con {name}.")
+
+
+@app.post("/lists/{list_id}/members/{user_id}/remove")
+def remove_member(list_id: int, user_id: int):
+    with SessionLocal() as session:
+        wl = session.get(Watchlist, list_id)
+        if wl:
+            wl.members = [m for m in wl.members if m.id != user_id]
+            session.commit()
+    scheduler.reschedule()
+    return redirect(f"/?list={list_id}", msg="Usuario quitado de la lista.")
+
+
+# ---------------------------------------------------------------- usuarios
+
+
+@app.get("/users")
+def users_page(request: Request):
+    with SessionLocal() as session:
+        users = session.scalars(select(BotUser).order_by(BotUser.created_at)).all()
+        data = [
+            {
+                "id": u.id,
+                "name": u.name,
+                "chat_id": u.chat_id,
+                "role": u.role,
+                "lists": ", ".join(wl.name for wl in u.shared_lists),
+            }
+            for u in users
+        ]
+    return templates.TemplateResponse(
+        request, "users.html", {"users": data, "telegram_ok": telegram.is_configured()}
+    )
+
+
+@app.post("/users/{user_id}/approve")
+def approve_user(user_id: int):
+    with SessionLocal() as session:
+        user = session.get(BotUser, user_id)
+        if not user or user.role != "pending":
+            return redirect("/users", err="Ese usuario no está pendiente.")
+        user.role = "user"
+        session.commit()
+        telegram.send_message(
+            "✅ ¡Acceso concedido! Escribe /menu para empezar.", chat_id=user.chat_id
+        )
+        name = user.name
+    scheduler.reschedule()
+    return redirect("/users", msg=f"{name} aprobado.")
+
+
+@app.post("/users/{user_id}/delete")
+def delete_user(user_id: int):
+    with SessionLocal() as session:
+        user = session.get(BotUser, user_id)
+        if not user or user.role == "admin":
+            return redirect("/users", err="No se puede eliminar ese usuario.")
+        admin = session.scalar(select(BotUser).where(BotUser.role == "admin"))
+        for wl in user.watchlists:
+            wl.owner_id = admin.id if admin else None
+        user.shared_lists.clear()
+        session.delete(user)
+        session.commit()
+    scheduler.reschedule()
+    return redirect("/users", msg="Usuario eliminado.")
 
 
 # ------------------------------------------------------------- ficha valor
@@ -368,4 +463,4 @@ def test_telegram():
 # "v" permite comprobar qué versión hay desplegada.
 @app.api_route("/health", methods=["GET", "HEAD"])
 def health():
-    return {"status": "ok", "v": 7}
+    return {"status": "ok", "v": 8}

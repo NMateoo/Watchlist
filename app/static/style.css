@@ -188,6 +188,20 @@ code { background: var(--surface-2); padding: 1px 6px; border-radius: 5px; font-
 .p-arrow.up { color: var(--up); }
 .p-arrow.down { color: var(--down); }
 
+/* ---- compartir listas ---- */
+.share-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: -8px 0 18px;
+}
+.chip-form { display: inline-flex; align-items: center; gap: 6px; }
+.chip {
+  background: var(--surface-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 99px;
+  padding: 4px 12px; font-size: 13px; font-weight: 500;
+}
+.chip:hover { border-color: var(--down); color: var(--down); filter: none; }
+.chip-form select { width: auto; padding: 5px 10px; font-size: 13px; }
+
 /* ---- formulario inline de nueva lista ---- */
 .new-list-inline { display: flex; gap: 6px; align-items: center; }
 .new-list-inline[hidden] { display: none; }
