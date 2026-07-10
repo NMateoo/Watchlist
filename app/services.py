@@ -80,6 +80,27 @@ def add_stock(session, wl: Watchlist, ticker: str) -> tuple[Stock | None, str | 
     return stock, None
 
 
+def parse_threshold(text: str, kind: str, current_price: float | None) -> float | None:
+    """Umbral de alerta escrito por el usuario: un precio ("150.50") o un
+    porcentaje desde el precio actual ("5%": above → +5 %, below → −5 %).
+    Devuelve el precio absoluto, o None si no es válido."""
+    text = text.strip().replace(",", ".")
+    if text.endswith("%"):
+        try:
+            pct = float(text[:-1])
+        except ValueError:
+            return None
+        if pct <= 0 or not current_price:
+            return None
+        factor = 1 + pct / 100 if kind == "above" else 1 - pct / 100
+        return round(current_price * factor, 4)
+    try:
+        value = float(text)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
 # ------------------------------------------------------------- membresías
 
 

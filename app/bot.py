@@ -303,12 +303,14 @@ def _stock_view(ctx: dict, stock_id: int, message_id: int | None = None) -> None
         info = {
             "ticker": stock.ticker, "name": stock.name, "currency": stock.currency,
             "notes": stock.notes, "target": stock.target_price, "list_id": stock.watchlist_id,
+            "qty": stock.quantity, "buy": stock.buy_price,
         }
         alert_lines = []
         for a in alerts:
             arrow = "⬆️ sube de" if a.kind == "above" else "⬇️ baja de"
-            state = "" if a.active else " (disparada)"
-            alert_lines.append(f"  {arrow} {_fmt(a.threshold, stock.currency)}{state}")
+            rep = " 🔁" if a.repeat else ""
+            state = "" if a.active else (" (esperando re-cruce)" if a.repeat else " (disparada)")
+            alert_lines.append(f"  {arrow} {_fmt(a.threshold, stock.currency)}{rep}{state}")
     q = prices.get_quote(info["ticker"])
     lines = [f"<b>{info['ticker']}</b> — {esc(info['name'])}"]
     if q:
@@ -319,6 +321,13 @@ def _stock_view(ctx: dict, stock_id: int, message_id: int | None = None) -> None
             lines.append(f"Rango 52 sem.: {_fmt(q['year_low'], q['currency'])} – {_fmt(q['year_high'], q['currency'])}")
     if info["target"]:
         lines.append(f"🎯 Objetivo: {_fmt(info['target'], info['currency'])}")
+    if info["qty"] and info["buy"] and q:
+        pl_pct = (q["price"] / info["buy"] - 1) * 100
+        pl = (q["price"] - info["buy"]) * info["qty"]
+        lines.append(
+            f"💼 Posición: {info['qty']:g} × {_fmt(info['buy'], info['currency'])} → "
+            f"{alerts_mod.fmt_pct(pl_pct)} ({_fmt(pl, info['currency'])})"
+        )
     if alert_lines:
         lines.append("🔔 Alertas:")
         lines.extend(alert_lines)
@@ -336,7 +345,8 @@ def _stock_view(ctx: dict, stock_id: int, message_id: int | None = None) -> None
     if can_edit:
         keyboard += [
             [_btn("🔔 Nueva alerta", f"alnew:{stock_id}"), _btn("🎯 Objetivo", f"target:{stock_id}")],
-            [_btn("📝 Notas", f"notes:{stock_id}"), _btn("🗑 Quitar", f"sd:{stock_id}")],
+            [_btn("💼 Posición", f"pos:{stock_id}"), _btn("📝 Notas", f"notes:{stock_id}")],
+            [_btn("🗑 Quitar", f"sd:{stock_id}")],
         ]
     keyboard.append([_btn("◀️ Volver", f"l:{info['list_id']}"), _btn("🔄 Actualizar", f"s:{stock_id}")])
     _show(ctx, "\n".join(filter(None, lines)), keyboard, message_id)
@@ -680,15 +690,27 @@ def _cb_alert_new(ctx, args, message_id):
     if not allowed:
         return
     keyboard = [
-        [_btn("⬆️ Si sube de…", f"alk:{args[0]}:above"), _btn("⬇️ Si baja de…", f"alk:{args[0]}:below")],
+        [_btn("⬆️ Si sube de…", f"alk:{args[0]}:above:0"), _btn("⬇️ Si baja de…", f"alk:{args[0]}:below:0")],
+        [_btn("🔁⬆️ Sube (se repite)", f"alk:{args[0]}:above:1"), _btn("🔁⬇️ Baja (se repite)", f"alk:{args[0]}:below:1")],
         [_btn("Cancelar", f"s:{args[0]}")],
     ]
-    _edit(ctx["chat"], message_id, "¿Qué tipo de alerta?", keyboard)
+    _edit(
+        ctx["chat"], message_id,
+        "¿Qué tipo de alerta? Las 🔁 se re-arman solas cuando el precio vuelve a cruzar el umbral.",
+        keyboard,
+    )
 
 
 def _cb_alert_kind(ctx, args, message_id):
-    _pending[ctx["chat"]] = {"action": "alert_price", "stock_id": int(args[0]), "kind": args[1]}
-    _send("Escríbeme el precio del umbral (ej: 150.50):", [[_btn("Cancelar", f"s:{args[0]}")]], ctx["chat"])
+    repeat = len(args) > 2 and args[2] == "1"
+    _pending[ctx["chat"]] = {
+        "action": "alert_price", "stock_id": int(args[0]), "kind": args[1], "repeat": repeat,
+    }
+    _send(
+        "Escríbeme el umbral: un precio (ej: 150.50) o un % desde el precio actual (ej: 5%):",
+        [[_btn("Cancelar", f"s:{args[0]}")]],
+        ctx["chat"],
+    )
 
 
 def _alert_update(ctx, alert_id: int, rearm: bool, message_id):
@@ -782,6 +804,16 @@ def _cb_notes(ctx, args, message_id):
     _send("Escríbeme las notas para este valor (o «quitar» para borrarlas):", [[_btn("Cancelar", f"s:{args[0]}")]], ctx["chat"])
 
 
+def _cb_position(ctx, args, message_id):
+    _pending[ctx["chat"]] = {"action": "position", "stock_id": int(args[0])}
+    _send(
+        "Escríbeme cantidad y precio de compra separados por un espacio "
+        "(ej: <code>10 120.50</code>), o «quitar» para borrar la posición:",
+        [[_btn("Cancelar", f"s:{args[0]}")]],
+        ctx["chat"],
+    )
+
+
 def _cb_chart(ctx, args, message_id):
     _send_chart(ctx["chat"], args[0], args[1] if len(args) > 1 else "6mo")
 
@@ -827,6 +859,7 @@ CALLBACK_HANDLERS = {
     "set": _cb_setting,
     "target": _cb_target,
     "notes": _cb_notes,
+    "pos": _cb_position,
     "g": _cb_chart,
     "n": _cb_news,
     "summary": _cb_summary,
@@ -900,14 +933,23 @@ def _handle_pending(ctx: dict, text: str) -> bool:
             return True
         _list_view(ctx, pending["list_id"])
     elif action == "alert_price":
-        value = _parse_number(text)
-        if value is None or value <= 0:
-            _send("Eso no parece un precio válido. Vuelve a intentarlo desde la ficha del valor.", chat_id=chat)
-            return True
         with SessionLocal() as session:
             stock = _get_stock_checked(session, ctx, pending["stock_id"], edit=True)
             if stock:
-                session.add(Alert(stock_id=stock.id, kind=pending["kind"], threshold=value))
+                quote = prices.get_quote(stock.ticker)
+                value = services.parse_threshold(
+                    text, pending["kind"], quote["price"] if quote else None
+                )
+                if value is None:
+                    _send(
+                        "Eso no parece un umbral válido. Usa un precio (150.50) o un porcentaje (5%).",
+                        chat_id=chat,
+                    )
+                    return True
+                session.add(Alert(
+                    stock_id=stock.id, kind=pending["kind"], threshold=value,
+                    repeat=pending.get("repeat", False),
+                ))
                 session.commit()
         _stock_view(ctx, pending["stock_id"])
     elif action == "target":
@@ -929,6 +971,24 @@ def _handle_pending(ctx: dict, text: str) -> bool:
             stock = _get_stock_checked(session, ctx, pending["stock_id"], edit=True)
             if stock:
                 stock.notes = "" if text.strip().lower() in ("quitar", "borrar") else text.strip()
+                session.commit()
+        _stock_view(ctx, pending["stock_id"])
+    elif action == "position":
+        with SessionLocal() as session:
+            stock = _get_stock_checked(session, ctx, pending["stock_id"], edit=True)
+            if stock:
+                if text.strip().lower() in ("quitar", "borrar", "no"):
+                    stock.quantity = None
+                    stock.buy_price = None
+                else:
+                    parts = text.split()
+                    qty = _parse_number(parts[0]) if parts else None
+                    buy = _parse_number(parts[1]) if len(parts) > 1 else None
+                    if not qty or not buy or qty <= 0 or buy <= 0:
+                        _send("No lo entendí. Escribe cantidad y precio (ej: 10 120.50), o «quitar».", chat_id=chat)
+                        return True
+                    stock.quantity = qty
+                    stock.buy_price = buy
                 session.commit()
         _stock_view(ctx, pending["stock_id"])
     elif action == "move":

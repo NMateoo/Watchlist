@@ -15,6 +15,12 @@
       {% if quote.year_low and quote.year_high %}
       <p class="hint">Rango 52 semanas: {{ quote.year_low | price(quote.currency) }} – {{ quote.year_high | price(quote.currency) }}</p>
       {% endif %}
+      {% if stock.quantity and stock.buy_price %}
+      <p class="hint">💼 Posición: {{ '%g' | format(stock.quantity) }} × {{ stock.buy_price | price(stock.currency) }}
+        → <span class="{{ 'up' if quote.price >= stock.buy_price else 'down' }}">
+          {{ ((quote.price / stock.buy_price - 1) * 100) | pct }}
+          ({{ ((quote.price - stock.buy_price) * stock.quantity) | price(stock.currency) }})</span></p>
+      {% endif %}
     {% else %}
       <p class="hint">Sin datos de cotización ahora mismo.</p>
     {% endif %}
@@ -38,6 +44,16 @@
         <input type="text" name="target_price" value="{{ stock.target_price if stock.target_price is not none }}"
                placeholder="ej: 150.00">
       </label>
+      <div class="field-row">
+        <label>Cantidad que tienes
+          <input type="text" name="quantity" value="{{ '%g' | format(stock.quantity) if stock.quantity is not none }}"
+                 placeholder="ej: 10">
+        </label>
+        <label>Precio de compra ({{ stock.currency }})
+          <input type="text" name="buy_price" value="{{ stock.buy_price if stock.buy_price is not none }}"
+                 placeholder="ej: 120.00">
+        </label>
+      </div>
       <label>Notas
         <textarea name="notes" rows="6" id="notes-area"
           placeholder="Por qué la sigo, tesis de inversión, niveles clave…">{{ stock.notes }}</textarea>
@@ -57,9 +73,14 @@
         <option value="below">Si baja de</option>
         <option value="above">Si sube de</option>
       </select>
-      <input type="text" name="threshold" placeholder="precio" required>
+      <input type="text" name="threshold" placeholder="precio o %" required
+             title="Un precio (150.50) o un porcentaje desde el precio actual (5%)">
+      <label class="inline" title="Se re-arma sola cuando el precio vuelve a cruzar el umbral">
+        <input type="checkbox" name="repeat" value="1"> 🔁</label>
       <button type="submit">Crear</button>
     </form>
+    <p class="hint">Umbral: un precio (<code>150.50</code>) o un % desde el precio actual (<code>5%</code>).
+      Con 🔁 la alerta se repite: se re-arma sola al re-cruzar el umbral.</p>
     <p id="alert-msg" class="hint" hidden></p>
     <ul class="alert-list" id="alert-list"></ul>
     <p class="muted" id="alert-empty" hidden>Sin alertas todavía.</p>
@@ -143,11 +164,12 @@
       const li = document.createElement('li');
       const info = document.createElement('span');
       info.innerHTML = (a.kind === 'above' ? '⬆️ Sube de ' : '⬇️ Baja de ') +
-        `<b>${fmtPrice(a.threshold, currency)}</b>`;
+        `<b>${fmtPrice(a.threshold, currency)}</b>` + (a.repeat ? ' 🔁' : '');
       if (!a.active) {
         const badge = document.createElement('span');
         badge.className = 'badge muted';
-        badge.textContent = a.triggered_at ? `disparada ${a.triggered_at}` : 'disparada';
+        const state = a.repeat ? 'esperando re-cruce' : 'disparada';
+        badge.textContent = a.triggered_at ? `${state} · ${a.triggered_at}` : state;
         info.append(' ', badge);
       }
       const actions = document.createElement('span');

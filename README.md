@@ -6,10 +6,15 @@ Monitoriza tus acciones, ETFs y cripto desde una web y recibe alertas en Telegra
 - 🗂️ **Varias listas de seguimiento** — organiza tus valores en pestañas; créalas, renómbralas
   y elimínalas desde la web o el bot.
 - 🔎 **Buscador con sugerencias** — escribe "apple", "santander", "oro" o "eurusd" y elige el ticker. Incluye materias primas: metales spot (`XAUUSD`, `XAGUSD`, `XPTUSD`, `XPDUSD`, vía gold-api.com) y futuros (`GC=F`, `CL=F`).
-- 🔔 **Alertas de precio** — te avisa cuando un valor cruza un umbral que definas.
+- 🔔 **Alertas de precio** — te avisa cuando un valor cruza un umbral: un precio (`150.50`) o un
+  % desde el precio actual (`5%`). Las alertas 🔁 se re-arman solas al re-cruzar el umbral.
 - ⚡ **Cambios bruscos** — aviso si algo se mueve más de X% en el día (una vez al día por valor).
 - 📊 **Resumen diario** — el estado de toda tu watchlist a la hora que elijas.
 - 📝 **Notas** — precio objetivo y apuntes personales por cada valor.
+- 💼 **Posición** — apunta cantidad y precio de compra y verás tu ganancia/pérdida en vivo en el
+  dashboard, la ficha, el bot y el resumen.
+- 📋 **Dashboard ordenable** — clic en las cabeceras para ordenar por precio, % del día, distancia
+  al objetivo o rentabilidad; mini-gráfica del último mes por valor. Tema claro/oscuro automático.
 - 🤖 **Bot interactivo** — manda `/menu` al bot y maneja TODO desde Telegram: listas, añadir/quitar
   valores, alertas, notas, objetivo y ajustes. Comandos: `/menu`, `/precio AAPL`, `/resumen`, `/ayuda`.
   Solo una instancia puede escuchar los comandos a la vez: la que tenga `BOT_POLLING=1` (por defecto);

@@ -11,6 +11,24 @@
   --up: #22c55e;
   --down: #ef4444;
   --warn: #f59e0b;
+  --shadow: rgba(0, 0, 0, .45);
+}
+
+/* Tema claro: sigue la preferencia del sistema */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f3f5fa;
+    --surface: #ffffff;
+    --surface-2: #eaeef6;
+    --border: #d6dce8;
+    --text: #1d2433;
+    --muted: #626e88;
+    --accent: #3565d4;
+    --up: #15803d;
+    --down: #dc2626;
+    --warn: #b45309;
+    --shadow: rgba(40, 55, 90, .18);
+  }
 }
 
 body {
@@ -135,8 +153,10 @@ button.small { padding: 4px 10px; font-size: 12.5px; background: var(--surface-2
   list-style: none;
   overflow: hidden;
   z-index: 20;
-  box-shadow: 0 8px 24px rgba(0,0,0,.45);
+  box-shadow: 0 8px 24px var(--shadow);
 }
+.suggestions .no-results { color: var(--muted); cursor: default; }
+.suggestions .no-results:hover { background: transparent; }
 .suggestions li {
   display: flex; align-items: baseline; gap: 10px;
   padding: 9px 14px;
@@ -172,12 +192,19 @@ code { background: var(--surface-2); padding: 1px 6px; border-radius: 5px; font-
 .watchlist .num { text-align: right; font-variant-numeric: tabular-nums; }
 .watchlist .name { color: var(--muted); max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 .watchlist .range { font-size: 13px; color: var(--muted); }
+.watchlist th.sortable { cursor: pointer; user-select: none; }
+.watchlist th.sortable:hover { color: var(--text); }
+.watchlist th .dir { color: var(--accent); }
+.tdist { color: var(--muted); font-size: 12px; margin-left: 4px; }
+.c-pos small { margin-left: 4px; font-size: 12px; }
+.spark { width: 72px; height: 26px; display: block; }
 
 /* Columnas menos importantes desaparecen al estrechar la ventana */
+@media (max-width: 950px) { .col-spark { display: none; } }
 @media (max-width: 900px) { .col-range { display: none; } }
 @media (max-width: 720px) { .col-target, .col-alerts { display: none; } }
 @media (max-width: 560px) {
-  .col-name { display: none; }
+  .col-name, .col-pos { display: none; }
   .watchlist th, .watchlist td { padding: 9px 8px; }
   main { padding: 16px 8px 48px; }
 }
@@ -238,9 +265,15 @@ code { background: var(--surface-2); padding: 1px 6px; border-radius: 5px; font-
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 @media (max-width: 760px) { .two-col { grid-template-columns: 1fr; } }
 
-.alert-form { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; }
+.alert-form { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
 .alert-form select { width: auto; }
-.alert-form input { width: 110px; }
+.alert-form input[type="text"] { width: 110px; }
+
+label.inline { display: inline-flex; align-items: center; gap: 4px; margin: 0; cursor: pointer; }
+label.inline input { width: auto; }
+
+.field-row { display: flex; gap: 10px; }
+.field-row label { flex: 1; }
 
 .alert-list { list-style: none; }
 .alert-list li {

@@ -319,6 +319,12 @@ def get_news(ticker: str, limit: int = 5) -> list[dict]:
 
 VALID_RANGES = {"1mo": "1d", "3mo": "1d", "6mo": "1d", "1y": "1d", "5y": "1wk", "max": "1mo"}
 
+# Caché de históricos: {(ticker, period): (timestamp, lista)}. Las mini-gráficas
+# del dashboard piden el histórico de todos los tickers a la vez; sin caché,
+# cada carga de la página serían N peticiones a Yahoo.
+_history_cache: dict[tuple[str, str], tuple[float, list[dict]]] = {}
+HISTORY_TTL_SECONDS = 600
+
 
 def get_history(ticker: str, period: str = "6mo") -> list[dict]:
     """Serie histórica de cierres para el gráfico: [{date, close}, ...]."""
@@ -328,14 +334,27 @@ def get_history(ticker: str, period: str = "6mo") -> list[dict]:
     if is_spot(ticker):
         # El gráfico del spot usa el futuro más cercano (misma forma y nivel).
         return get_history(SPOT_FUTURES[ticker], period)
+    cached = _history_cache.get((ticker, period))
+    if cached and time.time() - cached[0] < HISTORY_TTL_SECONDS:
+        return cached[1]
     try:
-        df = yf.Ticker(ticker.upper()).history(period=period, interval=VALID_RANGES[period])
+        df = yf.Ticker(ticker).history(period=period, interval=VALID_RANGES[period])
     except Exception as exc:
         log.warning("No se pudo obtener histórico de %s: %s", ticker, exc)
-        return []
+        return cached[1] if cached else []
     if df is None or df.empty:
-        return []
-    return [
+        return cached[1] if cached else []
+    data = [
         {"date": idx.strftime("%Y-%m-%d"), "close": round(float(row["Close"]), 4)}
         for idx, row in df.iterrows()
     ]
+    _history_cache[(ticker, period)] = (time.time(), data)
+    return data
+
+
+def get_histories(tickers: list[str], period: str = "1mo") -> dict[str, list[dict]]:
+    """Históricos de varios tickers en paralelo: {ticker: [{date, close}, ...]}."""
+    if not tickers:
+        return {}
+    results = list(_pool.map(lambda t: (t, get_history(t, period)), tickers))
+    return {t: data for t, data in results if data}

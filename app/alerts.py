@@ -85,6 +85,15 @@ def _check_threshold_alerts(session, stock: Stock, quote: dict) -> None:
     price = quote["price"]
     for alert in stock.alerts:
         if not alert.active:
+            # Las recurrentes se re-arman solas (en silencio) cuando el precio
+            # vuelve a cruzar el umbral en sentido contrario.
+            recrossed = (alert.kind == "above" and price < alert.threshold) or (
+                alert.kind == "below" and price > alert.threshold
+            )
+            if alert.repeat and recrossed:
+                alert.active = True
+                alert.triggered_at = None
+                log.info("Alerta %s de %s re-armada (precio %.2f)", alert.kind, stock.ticker, price)
             continue
         crossed = (alert.kind == "above" and price >= alert.threshold) or (
             alert.kind == "below" and price <= alert.threshold
@@ -150,6 +159,9 @@ def _summary_line(info: dict, quote: dict | None) -> str:
     if info["target"]:
         to_target = (info["target"] / quote["price"] - 1) * 100
         extras.append(f"🎯 {fmt_price(info['target'], quote['currency'])} ({fmt_pct(to_target)})")
+    if info.get("qty") and info.get("buy"):
+        pl_pct = (quote["price"] / info["buy"] - 1) * 100
+        extras.append(f"💼 {fmt_pct(pl_pct)}")
     if info["alerts"]:
         extras.append(f"🔔 {info['alerts']}")
     if extras:
@@ -179,6 +191,8 @@ def send_summary_to(chat_id: str | None) -> bool:
                 {
                     "ticker": s.ticker,
                     "target": s.target_price,
+                    "qty": s.quantity,
+                    "buy": s.buy_price,
                     "alerts": sum(1 for a in s.alerts if a.active),
                 }
                 for s in wl.stocks

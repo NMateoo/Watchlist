@@ -258,6 +258,7 @@ def _alerts_json(session, stock_id: int) -> list[dict]:
             "kind": a.kind,
             "threshold": a.threshold,
             "active": a.active,
+            "repeat": a.repeat,
             "triggered_at": alerts_mod.to_local(a.triggered_at).strftime("%d/%m %H:%M")
             if a.triggered_at else None,
         }
@@ -288,24 +289,46 @@ def stock_detail(request: Request, stock_id: int):
     )
 
 
+def _optional_number(raw: str) -> float | None:
+    """Campo numérico opcional de un formulario; ValueError si no es un número."""
+    raw = raw.strip().replace(",", ".")
+    return float(raw) if raw else None
+
+
 @app.post("/stocks/{stock_id}/notes")
-def save_notes(stock_id: int, notes: str = Form(""), target_price: str = Form("")):
+def save_notes(
+    stock_id: int,
+    notes: str = Form(""),
+    target_price: str = Form(""),
+    quantity: str = Form(""),
+    buy_price: str = Form(""),
+):
     with SessionLocal() as session:
         stock = session.get(Stock, stock_id)
         if not stock:
             return redirect("/", err="Valor no encontrado.")
         stock.notes = notes.strip()
         try:
-            stock.target_price = float(target_price.replace(",", ".")) if target_price.strip() else None
+            stock.target_price = _optional_number(target_price)
+            stock.quantity = _optional_number(quantity)
+            stock.buy_price = _optional_number(buy_price)
         except ValueError:
-            return redirect(f"/stocks/{stock.id}", err="Precio objetivo no válido.")
+            return redirect(f"/stocks/{stock.id}", err="Alguno de los números no es válido.")
         session.commit()
-        return redirect(f"/stocks/{stock.id}", msg="Notas guardadas.")
+        return redirect(f"/stocks/{stock.id}", msg="Guardado.")
 
 
 @app.get("/api/history/{ticker}")
 def api_history(ticker: str, period: str = "6mo"):
     return JSONResponse(prices.get_history(ticker, period))
+
+
+@app.get("/api/sparklines")
+def api_sparklines():
+    """Cierres diarios del último mes de toda la watchlist, para las mini-gráficas."""
+    with SessionLocal() as session:
+        tickers = sorted(set(session.scalars(select(Stock.ticker))))
+    return prices.get_histories(tickers, "1mo")
 
 
 @app.get("/api/quotes")
@@ -339,18 +362,26 @@ def api_news(ticker: str):
 
 
 @app.post("/api/alerts")
-def api_add_alert(stock_id: int = Form(...), kind: str = Form(...), threshold: str = Form(...)):
+def api_add_alert(
+    stock_id: int = Form(...),
+    kind: str = Form(...),
+    threshold: str = Form(...),
+    repeat: str = Form(""),
+):
     if kind not in ("above", "below"):
         return JSONResponse({"ok": False, "error": "Tipo de alerta no válido."}, status_code=400)
     with SessionLocal() as session:
         stock = session.get(Stock, stock_id)
         if not stock:
             return JSONResponse({"ok": False, "error": "Valor no encontrado."}, status_code=404)
-        try:
-            value = float(threshold.replace(",", "."))
-        except ValueError:
-            return JSONResponse({"ok": False, "error": "Umbral no válido."}, status_code=400)
-        session.add(Alert(stock_id=stock.id, kind=kind, threshold=value))
+        quote = prices.get_quote(stock.ticker)
+        value = services.parse_threshold(threshold, kind, quote["price"] if quote else None)
+        if value is None:
+            return JSONResponse(
+                {"ok": False, "error": "Umbral no válido. Usa un precio (150.50) o un porcentaje (5%)."},
+                status_code=400,
+            )
+        session.add(Alert(stock_id=stock.id, kind=kind, threshold=value, repeat=bool(repeat)))
         session.commit()
         return {"ok": True, "alerts": _alerts_json(session, stock.id)}
 
@@ -457,4 +488,4 @@ def health():
             {"id": j.id, "next": j.next_run_time.strftime("%d %H:%M:%S") if j.next_run_time else None}
             for j in scheduler.scheduler.get_jobs()
         ]
-    return {"status": "ok", "v": 12, "scheduler": scheduler.scheduler.running, "jobs": jobs}
+    return {"status": "ok", "v": 13, "scheduler": scheduler.scheduler.running, "jobs": jobs}

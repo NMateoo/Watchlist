@@ -69,6 +69,24 @@ def test_alternar_permiso_de_edicion(session):
     assert services.toggle_member_edit(session, member) is True
 
 
+def test_parse_threshold_precio():
+    assert services.parse_threshold("150.50", "above", None) == 150.5
+    assert services.parse_threshold("150,50", "below", None) == 150.5
+    assert services.parse_threshold("abc", "above", None) is None
+    assert services.parse_threshold("-5", "above", None) is None
+    assert services.parse_threshold("0", "above", None) is None
+
+
+def test_parse_threshold_porcentaje():
+    # above → +5% sobre el precio actual; below → −5%
+    assert services.parse_threshold("5%", "above", 100.0) == 105.0
+    assert services.parse_threshold("5%", "below", 100.0) == 95.0
+    assert services.parse_threshold("2,5%", "below", 200.0) == 195.0
+    assert services.parse_threshold("5%", "above", None) is None  # sin precio actual
+    assert services.parse_threshold("-5%", "above", 100.0) is None
+    assert services.parse_threshold("x%", "above", 100.0) is None
+
+
 def test_eliminar_usuario_pasa_sus_listas_al_admin(session):
     admin, user = _admin_y_usuario(session)
     wl, _ = services.create_list(session, "De David", user)

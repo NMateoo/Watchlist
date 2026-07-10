@@ -114,6 +114,9 @@ class Stock(Base):
     currency: Mapped[str] = mapped_column(String(10), default="USD")
     notes: Mapped[str] = mapped_column(Text, default="")
     target_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Posición: cuántas unidades tienes y a qué precio medio las compraste.
+    quantity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    buy_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     added_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     watchlist: Mapped[Watchlist] = relationship(back_populates="stocks")
@@ -132,6 +135,9 @@ class Alert(Base):
     kind: Mapped[str] = mapped_column(String(10))  # "above" | "below"
     threshold: Mapped[float] = mapped_column(Float)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Recurrente: tras dispararse se re-arma sola cuando el precio vuelve a
+    # cruzar el umbral en sentido contrario (histéresis).
+    repeat: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     triggered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
@@ -181,6 +187,13 @@ def init_db() -> None:
     needs_can_edit = inspector.has_table("watchlist_members") and "can_edit" not in [
         c["name"] for c in inspector.get_columns("watchlist_members")
     ]
+    # Migración v6 → v7: posición (cantidad/precio de compra) y alertas recurrentes.
+    needs_position = inspector.has_table("stocks") and "quantity" not in [
+        c["name"] for c in inspector.get_columns("stocks")
+    ]
+    needs_repeat = inspector.has_table("alerts") and "repeat" not in [
+        c["name"] for c in inspector.get_columns("alerts")
+    ]
     Base.metadata.create_all(engine)
     if needs_v2:
         with engine.begin() as conn:
@@ -217,6 +230,13 @@ def init_db() -> None:
             conn.execute(text(
                 "ALTER TABLE watchlist_members ADD COLUMN can_edit BOOLEAN NOT NULL DEFAULT TRUE"
             ))
+    if needs_position:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE stocks ADD COLUMN quantity FLOAT"))
+            conn.execute(text("ALTER TABLE stocks ADD COLUMN buy_price FLOAT"))
+    if needs_repeat:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE alerts ADD COLUMN repeat BOOLEAN NOT NULL DEFAULT FALSE"))
 
 
 def ensure_admin() -> None:

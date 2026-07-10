@@ -71,13 +71,15 @@
 <table class="watchlist">
   <thead>
     <tr>
-      <th>Ticker</th>
-      <th class="col-name">Nombre</th>
+      <th class="sortable" data-key="ticker" title="Ordenar">Ticker</th>
+      <th class="col-name sortable" data-key="name" title="Ordenar">Nombre</th>
       <th>Mercado</th>
-      <th class="num">Precio</th>
-      <th class="num">Hoy</th>
+      <th class="num sortable" data-key="price" title="Ordenar">Precio</th>
+      <th class="num sortable" data-key="change" title="Ordenar">Hoy</th>
+      <th class="col-spark">1 mes</th>
       <th class="num col-range">Rango 52 sem.</th>
-      <th class="num col-target">Objetivo</th>
+      <th class="num col-target sortable" data-key="target" title="Ordenar por distancia al objetivo">Objetivo</th>
+      <th class="num col-pos sortable" data-key="pos" title="Ordenar por rentabilidad">Posición</th>
       <th class="col-alerts">Alertas</th>
       <th></th>
     </tr>
@@ -85,19 +87,34 @@
   <tbody>
     {% for s in stocks %}
     {% set q = quotes.get(s.ticker) %}
-    <tr data-ticker="{{ s.ticker }}">
+    <tr data-ticker="{{ s.ticker }}" data-name="{{ s.name }}"
+        data-price="{{ q.price if q else '' }}" data-change="{{ q.change_pct if q else '' }}"
+        data-currency="{{ q.currency if q else s.currency }}"
+        data-target="{{ s.target_price if s.target_price else '' }}"
+        data-qty="{{ s.quantity if s.quantity else '' }}" data-buy="{{ s.buy_price if s.buy_price else '' }}">
       <td><a class="ticker" href="/stocks/{{ s.id }}">{{ s.ticker }}</a></td>
       <td class="name col-name">{{ s.name }}</td>
       <td class="c-market" data-state="{{ q.market_state if q else 'unknown' }}"></td>
       <td class="num c-price"><span class="p-val">{{ q.price | price(q.currency) if q else '—' }}</span><span class="p-arrow"></span></td>
       <td class="num c-change {{ ('up' if q.change_pct >= 0 else 'down') if q }}">
         {{ q.change_pct | pct if q else '—' }}</td>
+      <td class="col-spark"><svg class="spark" data-ticker="{{ s.ticker }}"></svg></td>
       <td class="num range col-range">
         {% if q and q.year_low and q.year_high %}
           {{ q.year_low | price(q.currency) }} – {{ q.year_high | price(q.currency) }}
         {% else %}—{% endif %}
       </td>
-      <td class="num col-target">{{ s.target_price | price(s.currency) if s.target_price else '—' }}</td>
+      <td class="num col-target">
+        {% if s.target_price %}{{ s.target_price | price(s.currency) }}
+          <small class="tdist">{% if q %}({{ ((s.target_price / q.price - 1) * 100) | pct }}){% endif %}</small>
+        {% else %}—{% endif %}
+      </td>
+      <td class="num col-pos c-pos">
+        {% if s.quantity and s.buy_price and q %}
+          <span class="{{ 'up' if q.price >= s.buy_price else 'down' }}">{{ ((q.price / s.buy_price - 1) * 100) | pct }}</span>
+          <small class="muted">{{ ((q.price - s.buy_price) * s.quantity) | price(s.currency) }}</small>
+        {% else %}—{% endif %}
+      </td>
       <td class="col-alerts">
         {% set active = s.alerts | selectattr('active') | list | length %}
         {% if active %}<span class="badge ok">{{ active }} activa{{ 's' if active > 1 }}</span>
@@ -128,6 +145,8 @@
   setupStockDeletion();
   renderMarketBadges();
   {% if stocks %}
+  setupSorting();
+  loadSparklines();
   startLivePrices({{ refresh_seconds }});
   {% endif %}
 
