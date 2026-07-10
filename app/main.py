@@ -480,7 +480,13 @@ def test_telegram():
 
 
 # UptimeRobot usa HEAD; hay que aceptarlo además de GET.
-# "v" permite comprobar qué versión hay desplegada.
+# "v" permite comprobar qué versión hay desplegada; "jobs" diagnostica el scheduler.
 @app.api_route("/health", methods=["GET", "HEAD"])
 def health():
-    return {"status": "ok", "v": 9}
+    jobs = []
+    if scheduler.scheduler.running:
+        jobs = [
+            {"id": j.id, "next": j.next_run_time.strftime("%d %H:%M:%S") if j.next_run_time else None}
+            for j in scheduler.scheduler.get_jobs()
+        ]
+    return {"status": "ok", "v": 10, "scheduler": scheduler.scheduler.running, "jobs": jobs}

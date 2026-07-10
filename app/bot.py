@@ -406,7 +406,7 @@ def _users_view(ctx: dict, message_id: int | None = None) -> None:
             elif u.role == "user":
                 lists = len(u.shared_lists)
                 lines.append(f"👤 {esc(u.name)} — {lists} lista{'s' if lists != 1 else ''}")
-                rows.append([_btn(f"🗑 Quitar a {u.name[:20]}", f"udel:{u.id}")])
+                rows.append([_btn(f"🗑️ Quitar a {u.name[:20]}", f"udel:{u.id}")])
             else:
                 lines.append(f"⏳ {esc(u.name)} (pendiente)")
                 rows.append([_btn(f"✅ Aprobar a {u.name[:16]}", f"uok:{u.id}"), _btn("❌", f"uno:{u.id}")])
