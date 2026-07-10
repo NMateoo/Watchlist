@@ -22,10 +22,17 @@
 <div class="share-bar">
   <span class="hint">👥 Compartida con:</span>
   {% for m in members %}
-  <form method="post" action="/lists/{{ active_list.id }}/members/{{ m.id }}/remove"
-        class="chip-form" onsubmit="return confirm('¿Quitar a {{ m.name }} de esta lista?')">
-    <button class="chip" title="Quitar de la lista">{{ m.name }} ✕</button>
-  </form>
+  <span class="chip-group">
+    <form method="post" action="/lists/{{ active_list.id }}/members/{{ m.id }}/toggle-edit"
+          class="chip-form">
+      <button class="chip" title="Cambiar permiso ({{ 'ahora puede editar' if m.can_edit else 'ahora solo lectura' }})">
+        {{ '✏️' if m.can_edit else '👁' }} {{ m.name }}</button>
+    </form>
+    <form method="post" action="/lists/{{ active_list.id }}/members/{{ m.id }}/remove"
+          class="chip-form" onsubmit="return confirm('¿Quitar a {{ m.name }} de esta lista?')">
+      <button class="chip chip-x" title="Quitar de la lista">✕</button>
+    </form>
+  </span>
   {% else %}<span class="muted">nadie (solo tú)</span>{% endfor %}
   {% if available_users %}
   <form method="post" action="/lists/{{ active_list.id }}/members/add" class="chip-form">

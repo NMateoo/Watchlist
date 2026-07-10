@@ -199,7 +199,11 @@ code { background: var(--surface-2); padding: 1px 6px; border-radius: 5px; font-
   border: 1px solid var(--border); border-radius: 99px;
   padding: 4px 12px; font-size: 13px; font-weight: 500;
 }
-.chip:hover { border-color: var(--down); color: var(--down); filter: none; }
+.chip:hover { border-color: var(--accent); color: var(--accent); filter: none; }
+.chip-group { display: inline-flex; }
+.chip-group .chip { border-radius: 99px 0 0 99px; border-right: none; }
+.chip-group .chip-x { border-radius: 0 99px 99px 0; padding-left: 8px; }
+.chip-x:hover { border-color: var(--down); color: var(--down); }
 .chip-form select { width: auto; padding: 5px 10px; font-size: 13px; }
 
 /* ---- formulario inline de nueva lista ---- */

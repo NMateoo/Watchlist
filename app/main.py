@@ -20,6 +20,7 @@ from app.database import (
     SessionLocal,
     Stock,
     Watchlist,
+    WatchlistMember,
     ensure_admin,
     get_check_interval,
     get_move_threshold,
@@ -78,8 +79,11 @@ def index(request: Request, list_id: int | None = Query(None, alias="list")):
             select(Stock).where(Stock.watchlist_id == active.id).order_by(Stock.ticker)
         ).all()
         _ = [s.alerts for s in stocks]  # cargar relación antes de cerrar sesión
-        members = list(active.members)
-        member_ids = {m.id for m in members}
+        members = [
+            {"id": m.user_id, "name": m.user.name, "can_edit": m.can_edit}
+            for m in active.memberships
+        ]
+        member_ids = {m["id"] for m in members}
         available_users = [
             u for u in session.scalars(select(BotUser).where(BotUser.role == "user"))
             if u.id not in member_ids
@@ -171,8 +175,7 @@ def delete_list(list_id: int):
     with SessionLocal() as session:
         wl = session.get(Watchlist, list_id)
         if wl:
-            wl.members.clear()
-            session.delete(wl)
+            session.delete(wl)  # membresías y valores caen en cascada
             session.commit()
     return redirect("/", msg="Lista eliminada.")
 
@@ -184,8 +187,8 @@ def add_member(list_id: int, user_id: int = Form(...)):
         user = session.get(BotUser, user_id)
         if not wl or not user or user.role != "user":
             return redirect("/", err="Lista o usuario no válidos.")
-        if not any(m.id == user.id for m in wl.members):
-            wl.members.append(user)
+        if not any(m.user_id == user.id for m in wl.memberships):
+            wl.memberships.append(WatchlistMember(user=user, can_edit=True))
             session.commit()
             telegram.send_message(
                 f"📬 Te han compartido la lista «{wl.name}». Escribe /menu para verla.",
@@ -199,12 +202,30 @@ def add_member(list_id: int, user_id: int = Form(...)):
 @app.post("/lists/{list_id}/members/{user_id}/remove")
 def remove_member(list_id: int, user_id: int):
     with SessionLocal() as session:
-        wl = session.get(Watchlist, list_id)
-        if wl:
-            wl.members = [m for m in wl.members if m.id != user_id]
+        member = session.get(WatchlistMember, (list_id, user_id))
+        if member:
+            session.delete(member)
             session.commit()
     scheduler.reschedule()
     return redirect(f"/?list={list_id}", msg="Usuario quitado de la lista.")
+
+
+@app.post("/lists/{list_id}/members/{user_id}/toggle-edit")
+def toggle_member_edit(list_id: int, user_id: int):
+    with SessionLocal() as session:
+        member = session.get(WatchlistMember, (list_id, user_id))
+        if not member:
+            return redirect(f"/?list={list_id}", err="Ese usuario no está en la lista.")
+        member.can_edit = not member.can_edit
+        session.commit()
+        mode = "✏️ puedes editarla" if member.can_edit else "👁 es de solo lectura para ti"
+        telegram.send_message(
+            f"El administrador ha cambiado tu permiso en «{member.watchlist.name}»: {mode}.",
+            chat_id=member.user.chat_id,
+        )
+        label = "puede editar" if member.can_edit else "solo lectura"
+        name = member.user.name
+    return redirect(f"/?list={list_id}", msg=f"{name}: {label}.")
 
 
 # ---------------------------------------------------------------- usuarios
@@ -254,8 +275,7 @@ def delete_user(user_id: int):
         admin = session.scalar(select(BotUser).where(BotUser.role == "admin"))
         for wl in user.watchlists:
             wl.owner_id = admin.id if admin else None
-        user.shared_lists.clear()
-        session.delete(user)
+        session.delete(user)  # sus membresías caen en cascada
         session.commit()
     scheduler.reschedule()
     return redirect("/users", msg="Usuario eliminado.")
@@ -463,4 +483,4 @@ def test_telegram():
 # "v" permite comprobar qué versión hay desplegada.
 @app.api_route("/health", methods=["GET", "HEAD"])
 def health():
-    return {"status": "ok", "v": 8}
+    return {"status": "ok", "v": 9}

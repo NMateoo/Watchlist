@@ -29,6 +29,7 @@ from app.database import (
     SessionLocal,
     Stock,
     Watchlist,
+    WatchlistMember,
     get_check_interval,
     get_move_threshold,
     get_user_summary_prefs,
@@ -211,26 +212,49 @@ def _lists_view(ctx: dict, message_id: int | None = None) -> None:
     _show(ctx, text, rows, message_id)
 
 
-def _can_touch_list(ctx: dict, wl: Watchlist | None) -> bool:
-    return wl is not None and (
-        _is_admin(ctx) or any(m.id == ctx["uid"] for m in wl.members)
-    )
+def _membership(ctx: dict, wl: Watchlist) -> WatchlistMember | None:
+    return next((m for m in wl.memberships if m.user_id == ctx["uid"]), None)
+
+
+def _can_view_list(ctx: dict, wl: Watchlist | None) -> bool:
+    return wl is not None and (_is_admin(ctx) or _membership(ctx, wl) is not None)
+
+
+def _can_edit_list(ctx: dict, wl: Watchlist | None) -> bool:
+    """Editar contenido: añadir/quitar valores, alertas, notas, objetivo."""
+    if wl is None:
+        return False
+    if _is_admin(ctx):
+        return True
+    member = _membership(ctx, wl)
+    return member is not None and member.can_edit
+
+
+def _can_delete_list(ctx: dict, wl: Watchlist | None) -> bool:
+    """Eliminar la lista entera: solo el admin o quien la creó."""
+    return wl is not None and (_is_admin(ctx) or wl.owner_id == ctx["uid"])
 
 
 def _list_view(ctx: dict, list_id: int, message_id: int | None = None) -> None:
     with SessionLocal() as session:
         wl = session.get(Watchlist, list_id)
-        if not _can_touch_list(ctx, wl):
+        if not _can_view_list(ctx, wl):
             _lists_view(ctx, message_id)
             return
         stocks = sorted(wl.stocks, key=lambda s: s.ticker)
         name = wl.name
-        member_names = ", ".join(m.name for m in wl.members)
+        can_edit = _can_edit_list(ctx, wl)
+        can_delete = _can_delete_list(ctx, wl)
+        member_names = ", ".join(
+            f"{m.user.name}{'' if m.can_edit else ' (solo ver)'}" for m in wl.memberships
+        )
         has_users = bool(session.scalar(select(BotUser).where(BotUser.role == "user")))
     quotes = prices.get_quotes([s.ticker for s in stocks])
     lines = [f"<b>📋 {esc(name)}</b>"]
     if _is_admin(ctx) and member_names:
         lines.append(f"👥 Compartida con {esc(member_names)}")
+    if not can_edit:
+        lines.append("👁 Solo lectura")
     for stock in stocks:
         q = quotes.get(stock.ticker)
         if q:
@@ -244,19 +268,25 @@ def _list_view(ctx: dict, list_id: int, message_id: int | None = None) -> None:
     if not stocks:
         lines.append("Lista vacía.")
     rows = [[_btn(s.ticker, f"s:{s.id}")] for s in stocks]
-    action_row = [_btn("➕ Añadir aquí", f"addl:{list_id}"), _btn("🗑 Eliminar lista", f"ldel:{list_id}")]
+    action_row = []
+    if can_edit:
+        action_row.append(_btn("➕ Añadir aquí", f"addl:{list_id}"))
     if _is_admin(ctx) and has_users:
-        action_row.insert(1, _btn("👥 Compartir", f"lasg:{list_id}"))
-    rows.append(action_row)
+        action_row.append(_btn("👥 Compartir", f"lasg:{list_id}"))
+    if can_delete:
+        action_row.append(_btn("🗑 Eliminar lista", f"ldel:{list_id}"))
+    if action_row:
+        rows.append(action_row)
     rows.append([_btn("◀️ Listas", "lists"), _btn("🔄 Actualizar", f"l:{list_id}")])
     _show(ctx, "\n".join(lines), rows, message_id)
 
 
-def _get_stock_checked(session, ctx: dict, stock_id: int) -> Stock | None:
+def _get_stock_checked(session, ctx: dict, stock_id: int, edit: bool = False) -> Stock | None:
     stock = session.get(Stock, stock_id)
-    if not stock or not _can_touch_list(ctx, stock.watchlist):
+    if not stock:
         return None
-    return stock
+    allowed = _can_edit_list(ctx, stock.watchlist) if edit else _can_view_list(ctx, stock.watchlist)
+    return stock if allowed else None
 
 
 def _stock_view(ctx: dict, stock_id: int, message_id: int | None = None) -> None:
@@ -266,6 +296,7 @@ def _stock_view(ctx: dict, stock_id: int, message_id: int | None = None) -> None
             _lists_view(ctx, message_id)
             return
         alerts = sorted(stock.alerts, key=lambda a: a.created_at, reverse=True)
+        can_edit = _can_edit_list(ctx, stock.watchlist)
         info = {
             "ticker": stock.ticker, "name": stock.name, "currency": stock.currency,
             "notes": stock.notes, "target": stock.target_price, "list_id": stock.watchlist_id,
@@ -298,10 +329,13 @@ def _stock_view(ctx: dict, stock_id: int, message_id: int | None = None) -> None
             notes_apart = notes
     keyboard = [
         [_btn("📈 Gráfico", f"g:{info['ticker']}:6mo"), _btn("📰 Noticias", f"n:{info['ticker']}")],
-        [_btn("🔔 Nueva alerta", f"alnew:{stock_id}"), _btn("🎯 Objetivo", f"target:{stock_id}")],
-        [_btn("📝 Notas", f"notes:{stock_id}"), _btn("🗑 Quitar", f"sd:{stock_id}")],
-        [_btn("◀️ Volver", f"l:{info['list_id']}"), _btn("🔄 Actualizar", f"s:{stock_id}")],
     ]
+    if can_edit:
+        keyboard += [
+            [_btn("🔔 Nueva alerta", f"alnew:{stock_id}"), _btn("🎯 Objetivo", f"target:{stock_id}")],
+            [_btn("📝 Notas", f"notes:{stock_id}"), _btn("🗑 Quitar", f"sd:{stock_id}")],
+        ]
+    keyboard.append([_btn("◀️ Volver", f"l:{info['list_id']}"), _btn("🔄 Actualizar", f"s:{stock_id}")])
     _show(ctx, "\n".join(filter(None, lines)), keyboard, message_id)
     if notes_apart:
         for i in range(0, len(notes_apart), 3500):
@@ -312,7 +346,7 @@ def _alerts_view(ctx: dict, message_id: int | None = None) -> None:
     with SessionLocal() as session:
         query = select(Alert).join(Stock).join(Watchlist).order_by(Alert.created_at.desc())
         if not _is_admin(ctx):
-            query = query.where(Watchlist.owner_id == ctx["uid"])
+            query = query.join(WatchlistMember).where(WatchlistMember.user_id == ctx["uid"])
         alerts = session.scalars(query).all()
         rows, lines = [], ["<b>🔔 Tus alertas</b>"]
         for a in alerts:
@@ -383,31 +417,40 @@ def _users_view(ctx: dict, message_id: int | None = None) -> None:
 
 
 def _share_view(ctx: dict, list_id: int, message_id: int | None) -> None:
-    """Compartir una lista: toca un usuario para añadirlo o quitarlo."""
+    """Compartir una lista: toca el nombre para añadir/quitar y el permiso para cambiarlo."""
     with SessionLocal() as session:
         wl = session.get(Watchlist, list_id)
         if not wl:
             _lists_view(ctx, message_id)
             return
         users = session.scalars(select(BotUser).where(BotUser.role == "user")).all()
-        member_ids = {m.id for m in wl.members}
-        rows = [
-            [_btn(("✅ " if u.id in member_ids else "▫️ ") + u.name, f"lasgto:{list_id}:{u.id}")]
-            for u in users
-        ]
+        memberships = {m.user_id: m for m in wl.memberships}
+        rows = []
+        for u in users:
+            member = memberships.get(u.id)
+            row = [_btn(("✅ " if member else "▫️ ") + u.name, f"lasgto:{list_id}:{u.id}")]
+            if member:
+                perm = "✏️ Edita" if member.can_edit else "👁 Solo ver"
+                row.append(_btn(perm, f"lperm:{list_id}:{u.id}"))
+            rows.append(row)
         name = wl.name
     rows.append([_btn("✔️ Listo", f"l:{list_id}")])
     _show(
         ctx,
-        f"👥 <b>Compartir «{esc(name)}»</b>\nToca un usuario para añadirlo o quitarlo. "
-        "Tú (admin) siempre ves todas las listas.",
+        f"👥 <b>Compartir «{esc(name)}»</b>\n"
+        "Toca un nombre para añadirlo o quitarlo, y su permiso para alternar "
+        "entre ✏️ editar y 👁 solo ver. Tú (admin) siempre lo ves y editas todo.",
         rows,
         message_id,
     )
 
 
+def _editable_lists(session, ctx: dict):
+    return [wl for wl in _user_lists(session, ctx) if _can_edit_list(ctx, wl)]
+
+
 def _pick_list_keyboard(session, ctx: dict, symbol: str) -> list:
-    watchlists = _user_lists(session, ctx)
+    watchlists = _editable_lists(session, ctx)
     rows = [[_btn(f"📋 {wl.name}", f"addto:{symbol}:{wl.id}")] for wl in watchlists]
     rows.append([_btn("Cancelar", "menu")])
     return rows
@@ -457,8 +500,8 @@ def _add_stock(ctx: dict, symbol: str, list_id: int, message_id: int | None) -> 
     symbol = symbol.upper()
     with SessionLocal() as session:
         wl = session.get(Watchlist, list_id)
-        if not _can_touch_list(ctx, wl):
-            _send("Esa lista ya no existe o no es tuya.", chat_id=ctx["chat"])
+        if not _can_edit_list(ctx, wl):
+            _send("Esa lista ya no existe o no tienes permiso para editarla.", chat_id=ctx["chat"])
             return
         exists = session.scalar(
             select(Stock).where(Stock.ticker == symbol, Stock.watchlist_id == list_id)
@@ -515,7 +558,7 @@ def _handle_callback(update: dict) -> None:
     parts = data.split(":")
     action, args = parts[0], parts[1:]
     _pending.pop(ctx["chat"], None)
-    admin_only = {"users", "uok", "uno", "udel", "udel2", "lasg", "lasgto"}
+    admin_only = {"users", "uok", "uno", "udel", "udel2", "lasg", "lasgto", "lperm"}
     if action in admin_only and not _is_admin(ctx):
         return
 
@@ -534,12 +577,18 @@ def _handle_callback(update: dict) -> None:
             ctx["chat"],
         )
     elif action == "ldel":
+        with SessionLocal() as session:
+            wl = session.get(Watchlist, int(args[0]))
+            allowed = _can_delete_list(ctx, wl)
+        if not allowed:
+            _send("Solo el administrador o quien creó la lista puede eliminarla.", chat_id=ctx["chat"])
+            return
         keyboard = [[_btn("Sí, eliminar", f"ldel2:{args[0]}"), _btn("No", f"l:{args[0]}")]]
         _edit(ctx["chat"], message_id, "¿Eliminar la lista con todo su contenido?", keyboard)
     elif action == "ldel2":
         with SessionLocal() as session:
             wl = session.get(Watchlist, int(args[0]))
-            if _can_touch_list(ctx, wl):
+            if _can_delete_list(ctx, wl):
                 session.delete(wl)
                 session.commit()
         _lists_view(ctx, message_id)
@@ -551,16 +600,31 @@ def _handle_callback(update: dict) -> None:
             wl = session.get(Watchlist, list_id)
             user = session.get(BotUser, uid)
             if wl and user and user.role == "user":
-                if any(m.id == uid for m in wl.members):
-                    wl.members = [m for m in wl.members if m.id != uid]
+                member = next((m for m in wl.memberships if m.user_id == uid), None)
+                if member:
+                    session.delete(member)
                 else:
-                    wl.members.append(user)
+                    wl.memberships.append(WatchlistMember(user=user, can_edit=True))
                     _send(
                         f"📬 Te han compartido la lista «{esc(wl.name)}». Escribe /menu para verla.",
                         chat_id=user.chat_id,
                     )
                 session.commit()
         scheduler.reschedule()
+        _share_view(ctx, list_id, message_id)
+    elif action == "lperm":
+        list_id, uid = int(args[0]), int(args[1])
+        with SessionLocal() as session:
+            wl = session.get(Watchlist, list_id)
+            member = next((m for m in wl.memberships if m.user_id == uid), None) if wl else None
+            if member:
+                member.can_edit = not member.can_edit
+                session.commit()
+                mode = "✏️ puedes editarla" if member.can_edit else "👁 es de solo lectura para ti"
+                _send(
+                    f"El administrador ha cambiado tu permiso en «{esc(wl.name)}»: {mode}.",
+                    chat_id=member.user.chat_id,
+                )
         _share_view(ctx, list_id, message_id)
     elif action == "s":
         _stock_view(ctx, int(args[0]), message_id)
@@ -569,7 +633,7 @@ def _handle_callback(update: dict) -> None:
         _edit(ctx["chat"], message_id, "¿Quitar este valor de la lista?", keyboard)
     elif action == "sd2":
         with SessionLocal() as session:
-            stock = _get_stock_checked(session, ctx, int(args[0]))
+            stock = _get_stock_checked(session, ctx, int(args[0]), edit=True)
             list_id = stock.watchlist_id if stock else None
             if stock:
                 session.delete(stock)
@@ -579,22 +643,32 @@ def _handle_callback(update: dict) -> None:
         _pending[ctx["chat"]] = {"action": "search", "list_id": None}
         _send("Escríbeme el nombre o ticker (ej: apple, SAN.MC, oro):", [[_btn("Cancelar", "menu")]], ctx["chat"])
     elif action == "addl":
+        with SessionLocal() as session:
+            wl = session.get(Watchlist, int(args[0]))
+            allowed = _can_edit_list(ctx, wl)
+        if not allowed:
+            _send("En esta lista solo tienes permiso de lectura.", chat_id=ctx["chat"])
+            return
         _pending[ctx["chat"]] = {"action": "search", "list_id": int(args[0])}
         _send("Escríbeme el nombre o ticker (ej: apple, SAN.MC, oro):", [[_btn("Cancelar", "menu")]], ctx["chat"])
     elif action == "pick":
         symbol = args[0]
         with SessionLocal() as session:
-            watchlists = _user_lists(session, ctx)
+            watchlists = _editable_lists(session, ctx)
             keyboard = _pick_list_keyboard(session, ctx, symbol)
         if len(watchlists) == 1:
             _add_stock(ctx, symbol, watchlists[0].id, message_id)
         elif not watchlists:
-            _send("No tienes ninguna lista; crea una primero desde 📋 Mis listas.", chat_id=ctx["chat"])
+            _send("No tienes ninguna lista editable; crea una desde 📋 Mis listas.", chat_id=ctx["chat"])
         else:
             _edit(ctx["chat"], message_id, f"¿A qué lista añado <b>{symbol}</b>?", keyboard)
     elif action == "addto":
         _add_stock(ctx, args[0], int(args[1]), message_id)
     elif action == "alnew":
+        with SessionLocal() as session:
+            allowed = _get_stock_checked(session, ctx, int(args[0]), edit=True) is not None
+        if not allowed:
+            return
         keyboard = [
             [_btn("⬆️ Si sube de…", f"alk:{args[0]}:above"), _btn("⬇️ Si baja de…", f"alk:{args[0]}:below")],
             [_btn("Cancelar", f"s:{args[0]}")],
@@ -606,7 +680,7 @@ def _handle_callback(update: dict) -> None:
     elif action in ("ad", "ar"):
         with SessionLocal() as session:
             alert = session.get(Alert, int(args[0]))
-            if alert and _can_touch_list(ctx, alert.stock.watchlist):
+            if alert and _can_edit_list(ctx, alert.stock.watchlist):
                 if action == "ad":
                     session.delete(alert)
                 else:
@@ -657,8 +731,7 @@ def _handle_callback(update: dict) -> None:
                 admin = session.scalar(select(BotUser).where(BotUser.role == "admin"))
                 for wl in user.watchlists:
                     wl.owner_id = admin.id
-                user.shared_lists.clear()
-                session.delete(user)
+                session.delete(user)  # sus membresías caen en cascada
                 session.commit()
         scheduler.reschedule()  # retirar los jobs de resumen del usuario
         _users_view(ctx, message_id)
@@ -726,7 +799,8 @@ def _handle_pending(ctx: dict, text: str) -> bool:
                 wl = Watchlist(name=name, owner_id=ctx["uid"])
                 if not _is_admin(ctx):
                     user = session.get(BotUser, ctx["uid"])
-                    wl.members.append(user)  # quien la crea la ve
+                    # quien la crea la ve y puede editarla
+                    wl.memberships.append(WatchlistMember(user=user, can_edit=True))
                 session.add(wl)
                 session.commit()
         _lists_view(ctx)
@@ -736,14 +810,14 @@ def _handle_pending(ctx: dict, text: str) -> bool:
             _send("Eso no parece un precio válido. Vuelve a intentarlo desde la ficha del valor.", chat_id=chat)
             return True
         with SessionLocal() as session:
-            stock = _get_stock_checked(session, ctx, pending["stock_id"])
+            stock = _get_stock_checked(session, ctx, pending["stock_id"], edit=True)
             if stock:
                 session.add(Alert(stock_id=stock.id, kind=pending["kind"], threshold=value))
                 session.commit()
         _stock_view(ctx, pending["stock_id"])
     elif action == "target":
         with SessionLocal() as session:
-            stock = _get_stock_checked(session, ctx, pending["stock_id"])
+            stock = _get_stock_checked(session, ctx, pending["stock_id"], edit=True)
             if stock:
                 if text.strip().lower() in ("quitar", "borrar", "no"):
                     stock.target_price = None
@@ -757,7 +831,7 @@ def _handle_pending(ctx: dict, text: str) -> bool:
         _stock_view(ctx, pending["stock_id"])
     elif action == "notes":
         with SessionLocal() as session:
-            stock = _get_stock_checked(session, ctx, pending["stock_id"])
+            stock = _get_stock_checked(session, ctx, pending["stock_id"], edit=True)
             if stock:
                 stock.notes = "" if text.strip().lower() in ("quitar", "borrar") else text.strip()
                 session.commit()

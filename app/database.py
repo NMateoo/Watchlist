@@ -6,13 +6,11 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     Boolean,
-    Column,
     DateTime,
     Float,
     ForeignKey,
     Index,
     String,
-    Table,
     Text,
     create_engine,
     inspect,
@@ -41,13 +39,22 @@ class Base(DeclarativeBase):
     pass
 
 
-# Qué usuarios comparten cada lista (el admin ve todas sin necesidad de fila).
-watchlist_members = Table(
-    "watchlist_members",
-    Base.metadata,
-    Column("watchlist_id", ForeignKey("watchlists.id", ondelete="CASCADE"), primary_key=True),
-    Column("user_id", ForeignKey("bot_users.id", ondelete="CASCADE"), primary_key=True),
-)
+class WatchlistMember(Base):
+    """Qué usuarios comparten cada lista y con qué permiso.
+    El admin ve y edita todo sin necesidad de fila."""
+
+    __tablename__ = "watchlist_members"
+
+    watchlist_id: Mapped[int] = mapped_column(
+        ForeignKey("watchlists.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("bot_users.id", ondelete="CASCADE"), primary_key=True
+    )
+    can_edit: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    watchlist: Mapped["Watchlist"] = relationship(back_populates="memberships")
+    user: Mapped["BotUser"] = relationship(back_populates="memberships")
 
 
 class BotUser(Base):
@@ -65,9 +72,13 @@ class BotUser(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     watchlists: Mapped[list["Watchlist"]] = relationship(back_populates="owner")
-    shared_lists: Mapped[list["Watchlist"]] = relationship(
-        secondary=watchlist_members, back_populates="members"
+    memberships: Mapped[list[WatchlistMember]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
     )
+
+    @property
+    def shared_lists(self) -> list["Watchlist"]:
+        return [m.watchlist for m in self.memberships]
 
 
 class Watchlist(Base):
@@ -79,12 +90,16 @@ class Watchlist(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     owner: Mapped[BotUser | None] = relationship(back_populates="watchlists")
-    members: Mapped[list[BotUser]] = relationship(
-        secondary=watchlist_members, back_populates="shared_lists"
+    memberships: Mapped[list[WatchlistMember]] = relationship(
+        back_populates="watchlist", cascade="all, delete-orphan"
     )
     stocks: Mapped[list["Stock"]] = relationship(
         back_populates="watchlist", cascade="all, delete-orphan"
     )
+
+    @property
+    def members(self) -> list[BotUser]:
+        return [m.user for m in self.memberships]
 
 
 class Stock(Base):
@@ -162,6 +177,10 @@ def init_db() -> None:
     ]
     # Migración v4 → v5: listas compartidas con varios usuarios.
     needs_members = inspector.has_table("watchlists") and not inspector.has_table("watchlist_members")
+    # Migración v5 → v6: permiso de edición por miembro.
+    needs_can_edit = inspector.has_table("watchlist_members") and "can_edit" not in [
+        c["name"] for c in inspector.get_columns("watchlist_members")
+    ]
     Base.metadata.create_all(engine)
     if needs_v2:
         with engine.begin() as conn:
@@ -192,6 +211,11 @@ def init_db() -> None:
                 "INSERT INTO watchlist_members (watchlist_id, user_id) "
                 "SELECT w.id, w.owner_id FROM watchlists w "
                 "JOIN bot_users u ON u.id = w.owner_id WHERE u.role != 'admin'"
+            ))
+    if needs_can_edit:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "ALTER TABLE watchlist_members ADD COLUMN can_edit BOOLEAN NOT NULL DEFAULT TRUE"
             ))
 
 
