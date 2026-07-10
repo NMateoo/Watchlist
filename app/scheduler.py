@@ -18,6 +18,20 @@ log = logging.getLogger(__name__)
 
 scheduler = BackgroundScheduler(timezone=config.TIMEZONE)
 
+# Configuración vigente de cada job de resumen. Solo se (re)programa un job si
+# su spec cambió: reprogramar un intervalo reinicia su cuenta atrás, y si se
+# hace más a menudo que el propio intervalo, el job no se dispararía jamás.
+_job_specs: dict[str, tuple] = {}
+
+
+def _ensure_job(job_id: str, spec: tuple, **add_kwargs) -> None:
+    if _job_specs.get(job_id) == spec and scheduler.get_job(job_id):
+        return
+    if scheduler.get_job(job_id):
+        scheduler.remove_job(job_id)
+    scheduler.add_job(id=job_id, **add_kwargs)
+    _job_specs[job_id] = spec
+
 
 def _sync_user_summaries() -> None:
     """Crea/actualiza un job periódico y uno diario por cada usuario del bot."""
@@ -32,29 +46,24 @@ def _sync_user_summaries() -> None:
         periodic_id, daily_id = f"psum_{uid}", f"dsum_{uid}"
         if interval > 0:
             desired.add(periodic_id)
-            if scheduler.get_job(periodic_id):
-                scheduler.reschedule_job(periodic_id, trigger="interval", minutes=interval)
-            else:
-                scheduler.add_job(
-                    alerts.send_summary_to, "interval", minutes=interval,
-                    id=periodic_id, args=[chat], max_instances=1, coalesce=True,
-                )
+            _ensure_job(
+                periodic_id, ("interval", interval, chat),
+                func=alerts.send_summary_to, trigger="interval", minutes=interval,
+                args=[chat], max_instances=1, coalesce=True,
+            )
         hour, minute = stime.split(":")
         desired.add(daily_id)
-        if scheduler.get_job(daily_id):
-            scheduler.reschedule_job(daily_id, trigger="cron", hour=int(hour), minute=int(minute))
-        else:
-            scheduler.add_job(
-                alerts.send_summary_to, "cron", hour=int(hour), minute=int(minute),
-                id=daily_id, args=[chat],
-            )
-        log.info("Resúmenes de uid %d: cada %s, diario a las %s", uid,
-                 f"{interval} min" if interval else "— (off)", stime)
+        _ensure_job(
+            daily_id, ("cron", stime, chat),
+            func=alerts.send_summary_to, trigger="cron", hour=int(hour), minute=int(minute),
+            args=[chat],
+        )
 
     # quitar jobs de usuarios eliminados o con el periódico desactivado
     for job in scheduler.get_jobs():
         if (job.id.startswith("psum_") or job.id.startswith("dsum_")) and job.id not in desired:
             scheduler.remove_job(job.id)
+            _job_specs.pop(job.id, None)
 
 
 def start() -> None:

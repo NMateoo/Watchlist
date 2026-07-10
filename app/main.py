@@ -489,4 +489,4 @@ def health():
             {"id": j.id, "next": j.next_run_time.strftime("%d %H:%M:%S") if j.next_run_time else None}
             for j in scheduler.scheduler.get_jobs()
         ]
-    return {"status": "ok", "v": 10, "scheduler": scheduler.scheduler.running, "jobs": jobs}
+    return {"status": "ok", "v": 11, "scheduler": scheduler.scheduler.running, "jobs": jobs}
