@@ -10,6 +10,13 @@
     <button type="submit" class="small">Crear</button>
     <button type="button" class="small" id="new-list-cancel">Cancelar</button>
   </form>
+  <button class="icon" id="rename-list-btn" title="Renombrar la lista actual">✏️</button>
+  <form method="post" action="/lists/{{ active_list.id }}/rename" id="rename-list-form"
+        class="new-list-inline" hidden>
+    <input type="text" name="name" value="{{ active_list.name }}" maxlength="60" required>
+    <button type="submit" class="small">Guardar</button>
+    <button type="button" class="small" id="rename-list-cancel">Cancelar</button>
+  </form>
   {% if watchlists | length > 1 %}
   <form method="post" action="/lists/{{ active_list.id }}/delete" class="tab-delete"
         onsubmit="return confirm('¿Eliminar la lista «{{ active_list.name }}» y todo su contenido?')">
@@ -134,6 +141,18 @@
   document.getElementById('new-list-cancel').addEventListener('click', () => {
     newListForm.hidden = true;
     newListBtn.hidden = false;
+  });
+
+  const renameBtn = document.getElementById('rename-list-btn');
+  const renameForm = document.getElementById('rename-list-form');
+  renameBtn.addEventListener('click', () => {
+    renameBtn.hidden = true;
+    renameForm.hidden = false;
+    renameForm.elements['name'].select();
+  });
+  document.getElementById('rename-list-cancel').addEventListener('click', () => {
+    renameForm.hidden = true;
+    renameBtn.hidden = false;
   });
 </script>
 {% endblock %}

@@ -16,6 +16,25 @@ log = logging.getLogger(__name__)
 _cache: dict[str, tuple[float, dict]] = {}
 CACHE_TTL_SECONDS = 120
 
+# Pool compartido para pedir varios tickers a la vez (crear uno por petición
+# desperdicia hilos cuando la web refresca cada pocos segundos).
+_pool = ThreadPoolExecutor(max_workers=8)
+
+# Momento del último poll de la web. El job que refresca la caché en segundo
+# plano solo trabaja si alguien ha mirado la web hace poco; así una pestaña
+# cerrada no genera tráfico contra Yahoo.
+_last_ui_poll = 0.0
+UI_ACTIVE_WINDOW = 90
+
+
+def mark_ui_activity() -> None:
+    global _last_ui_poll
+    _last_ui_poll = time.time()
+
+
+def ui_recently_active() -> bool:
+    return time.time() - _last_ui_poll < UI_ACTIVE_WINDOW
+
 # ---- metales spot (Yahoo retiró XAUUSD=X; el precio sale de gold-api.com) --
 
 SPOT_PATTERN = re.compile(r"^X(AU|AG|PT|PD)USD$")
@@ -143,7 +162,9 @@ def _fetch_quote(ticker: str) -> dict | None:
             "price": float(price),
             "prev_close": float(prev) if prev else None,
             "change_pct": round(change_pct, 2),
-            "currency": (meta.get("currency") or "USD").upper(),
+            # Ojo: no pasar a mayúsculas — "GBp" son peniques (1/100 de libra)
+            # y convertirlo a "GBP" mostraría precios 100 veces mayores.
+            "currency": meta.get("currency") or "USD",
             "year_high": meta.get("fiftyTwoWeekHigh"),
             "year_low": meta.get("fiftyTwoWeekLow"),
             "market_state": _market_state(meta.get("currentTradingPeriod")),
@@ -170,8 +191,7 @@ def get_quotes(tickers: list[str], max_age: int = CACHE_TTL_SECONDS) -> dict[str
     """Cotizaciones de varios tickers en paralelo. Devuelve {ticker: quote}."""
     if not tickers:
         return {}
-    with ThreadPoolExecutor(max_workers=min(8, len(tickers))) as pool:
-        results = pool.map(lambda t: get_quote(t, max_age), tickers)
+    results = list(_pool.map(lambda t: get_quote(t, max_age), tickers))
     return {q["ticker"]: q for q in results if q}
 
 

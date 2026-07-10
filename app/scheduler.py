@@ -6,10 +6,12 @@ import logging
 from apscheduler.schedulers.background import BackgroundScheduler
 from sqlalchemy import select
 
-from app import alerts, config
+from app import alerts, config, prices
 from app.database import (
     BotUser,
+    Stock,
     get_check_interval,
+    get_refresh_seconds,
     get_user_summary_prefs,
     session_scope,
 )
@@ -66,26 +68,48 @@ def _sync_user_summaries() -> None:
             _job_specs.pop(job.id, None)
 
 
-def start() -> None:
-    if not config.SCHEDULER_ENABLED:
-        log.info("SCHEDULER_ENABLED=0: esta instancia no comprueba alertas ni manda resúmenes")
+def _refresh_quotes() -> None:
+    """Mantiene caliente la caché de cotizaciones mientras alguien mira la web.
+    Así /api/quotes sirve siempre de caché y solo este job habla con Yahoo,
+    da igual cuántas pestañas haya abiertas. Si nadie ha hecho poll hace poco,
+    no hace nada (una pestaña cerrada no genera tráfico)."""
+    if not prices.ui_recently_active():
         return
     with session_scope() as session:
+        tickers = sorted(set(session.scalars(select(Stock.ticker))))
+        refresh = get_refresh_seconds(session)
+    if tickers:
+        prices.get_quotes(tickers, max_age=max(3, refresh - 1))
+
+
+def start() -> None:
+    with session_scope() as session:
         interval = get_check_interval(session)
+        refresh = get_refresh_seconds(session)
+    # El refresco de precios corre en TODAS las instancias: la caché es de cada
+    # proceso, y no manda nada a Telegram, así que no duplica avisos.
     scheduler.add_job(
-        alerts.check_alerts,
-        "interval",
-        minutes=interval,
-        id="check_alerts",
-        max_instances=1,
-        coalesce=True,
+        _refresh_quotes, "interval", seconds=refresh,
+        id="refresh_quotes", max_instances=1, coalesce=True,
     )
-    # Re-sincronizar cada 15 min: recoge altas/bajas de usuarios o cambios de
-    # preferencias hechos desde otra instancia (p. ej. la web en local).
-    scheduler.add_job(_sync_user_summaries, "interval", minutes=15, id="sync_summaries")
+    if config.SCHEDULER_ENABLED:
+        scheduler.add_job(
+            alerts.check_alerts,
+            "interval",
+            minutes=interval,
+            id="check_alerts",
+            max_instances=1,
+            coalesce=True,
+        )
+        # Re-sincronizar cada 15 min: recoge altas/bajas de usuarios o cambios de
+        # preferencias hechos desde otra instancia (p. ej. la web en local).
+        scheduler.add_job(_sync_user_summaries, "interval", minutes=15, id="sync_summaries")
     scheduler.start()
-    _sync_user_summaries()
-    log.info("Scheduler iniciado: alertas cada %d min (%s)", interval, config.TIMEZONE)
+    if config.SCHEDULER_ENABLED:
+        _sync_user_summaries()
+        log.info("Scheduler iniciado: alertas cada %d min (%s)", interval, config.TIMEZONE)
+    else:
+        log.info("SCHEDULER_ENABLED=0: esta instancia no comprueba alertas ni manda resúmenes")
 
 
 def reschedule() -> None:
@@ -94,8 +118,11 @@ def reschedule() -> None:
         return
     with session_scope() as session:
         interval = get_check_interval(session)
-    scheduler.reschedule_job("check_alerts", trigger="interval", minutes=interval)
-    _sync_user_summaries()
+        refresh = get_refresh_seconds(session)
+    scheduler.reschedule_job("refresh_quotes", trigger="interval", seconds=refresh)
+    if config.SCHEDULER_ENABLED:
+        scheduler.reschedule_job("check_alerts", trigger="interval", minutes=interval)
+        _sync_user_summaries()
 
 
 def stop() -> None:

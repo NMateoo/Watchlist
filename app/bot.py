@@ -20,7 +20,7 @@ from html import escape as esc
 import httpx
 from sqlalchemy import select
 
-from app import charts, config, prices, scheduler
+from app import charts, config, prices, scheduler, services
 from app import alerts as alerts_mod
 from app import telegram
 from app.database import (
@@ -47,13 +47,16 @@ MARKET_LABELS = {"open": "🟢 Abierto", "pre": "🟡 Pre-market", "post": "🟣
 _pending: dict[str, dict] = {}
 _stop_event = threading.Event()
 
+# Cliente HTTP compartido: reutiliza conexiones en vez de abrir una por llamada.
+_client = httpx.Client()
+
 
 # ------------------------------------------------------------ API helpers
 
 
 def _call(method: str, **payload) -> dict:
     try:
-        resp = httpx.post(
+        resp = _client.post(
             API.format(token=config.TELEGRAM_BOT_TOKEN, method=method), json=payload, timeout=35
         )
         data = resp.json()
@@ -101,7 +104,7 @@ def _send_photo(png: bytes, caption: str, keyboard: list | None = None, chat_id:
     if keyboard:
         data["reply_markup"] = json.dumps({"inline_keyboard": keyboard})
     try:
-        resp = httpx.post(
+        resp = _client.post(
             API.format(token=config.TELEGRAM_BOT_TOKEN, method="sendPhoto"),
             data=data,
             files={"photo": ("chart.png", png, "image/png")},
@@ -254,7 +257,7 @@ def _list_view(ctx: dict, list_id: int, message_id: int | None = None) -> None:
     if _is_admin(ctx) and member_names:
         lines.append(f"👥 Compartida con {esc(member_names)}")
     if not can_edit:
-        lines.append("👁 Solo lectura")
+        lines.append("👁️ Solo lectura")
     for stock in stocks:
         q = quotes.get(stock.ticker)
         if q:
@@ -273,10 +276,10 @@ def _list_view(ctx: dict, list_id: int, message_id: int | None = None) -> None:
         action_row.append(_btn("➕ Añadir aquí", f"addl:{list_id}"))
     if _is_admin(ctx) and has_users:
         action_row.append(_btn("👥 Compartir", f"lasg:{list_id}"))
-    if can_delete:
-        action_row.append(_btn("🗑 Eliminar lista", f"ldel:{list_id}"))
     if action_row:
         rows.append(action_row)
+    if can_delete:
+        rows.append([_btn("✏️ Renombrar", f"lren:{list_id}"), _btn("🗑 Eliminar lista", f"ldel:{list_id}")])
     rows.append([_btn("◀️ Listas", "lists"), _btn("🔄 Actualizar", f"l:{list_id}")])
     _show(ctx, "\n".join(lines), rows, message_id)
 
@@ -430,7 +433,7 @@ def _share_view(ctx: dict, list_id: int, message_id: int | None) -> None:
             member = memberships.get(u.id)
             row = [_btn(("✅ " if member else "▫️ ") + u.name, f"lasgto:{list_id}:{u.id}")]
             if member:
-                perm = "✏️ Edita" if member.can_edit else "👁 Solo ver"
+                perm = "✏️ Edita" if member.can_edit else "👁️ Solo ver"
                 row.append(_btn(perm, f"lperm:{list_id}:{u.id}"))
             rows.append(row)
         name = wl.name
@@ -439,7 +442,7 @@ def _share_view(ctx: dict, list_id: int, message_id: int | None) -> None:
         ctx,
         f"👥 <b>Compartir «{esc(name)}»</b>\n"
         "Toca un nombre para añadirlo o quitarlo, y su permiso para alternar "
-        "entre ✏️ editar y 👁 solo ver. Tú (admin) siempre lo ves y editas todo.",
+        "entre ✏️ editar y 👁️ solo ver. Tú (admin) siempre lo ves y editas todo.",
         rows,
         message_id,
     )
@@ -497,32 +500,17 @@ def _send_chart(chat_id: str, ticker: str, period: str = "6mo") -> None:
 
 
 def _add_stock(ctx: dict, symbol: str, list_id: int, message_id: int | None) -> None:
-    symbol = symbol.upper()
     with SessionLocal() as session:
         wl = session.get(Watchlist, list_id)
         if not _can_edit_list(ctx, wl):
             _send("Esa lista ya no existe o no tienes permiso para editarla.", chat_id=ctx["chat"])
             return
-        exists = session.scalar(
-            select(Stock).where(Stock.ticker == symbol, Stock.watchlist_id == list_id)
-        )
-        if exists:
-            _send(f"{symbol} ya está en «{esc(wl.name)}».", chat_id=ctx["chat"])
-            _stock_view(ctx, exists.id, message_id)
-            return
-    quote = prices.get_quote(symbol)
-    if not quote:
-        _send(f"No encuentro cotización para {symbol}.", chat_id=ctx["chat"])
-        return
-    with SessionLocal() as session:
-        stock = Stock(
-            ticker=symbol, watchlist_id=list_id,
-            name=prices.lookup_name(symbol), currency=quote["currency"],
-        )
-        session.add(stock)
-        session.commit()
-        stock_id = stock.id
-    _stock_view(ctx, stock_id, message_id)
+        stock, error = services.add_stock(session, wl, symbol)
+        stock_id = stock.id if stock else None
+    if error:
+        _send(esc(error), chat_id=ctx["chat"])
+    if stock_id:
+        _stock_view(ctx, stock_id, message_id)
 
 
 def _handle_search_text(ctx: dict, text: str, list_id: int | None) -> None:
@@ -546,6 +534,307 @@ def _handle_search_text(ctx: dict, text: str, list_id: int | None) -> None:
 # ------------------------------------------------------------ despacho
 
 
+# Cada acción de un botón tiene su función (ctx, args, message_id); el
+# diccionario CALLBACK_HANDLERS del final las despacha por nombre.
+
+
+def _cb_menu(ctx, args, message_id):
+    _main_menu(ctx, message_id)
+
+
+def _cb_lists(ctx, args, message_id):
+    _lists_view(ctx, message_id)
+
+
+def _cb_list(ctx, args, message_id):
+    _list_view(ctx, int(args[0]), message_id)
+
+
+def _cb_list_new(ctx, args, message_id):
+    _pending[ctx["chat"]] = {"action": "new_list"}
+    _send(
+        "Escríbeme el <b>nombre</b> de la nueva lista (solo el nombre — "
+        "los valores se añaden después con ➕ Añadir):",
+        [[_btn("Cancelar", "menu")]],
+        ctx["chat"],
+    )
+
+
+def _cb_list_rename(ctx, args, message_id):
+    list_id = int(args[0])
+    with SessionLocal() as session:
+        wl = session.get(Watchlist, list_id)
+        allowed = _can_delete_list(ctx, wl)
+        name = wl.name if wl else ""
+    if not allowed:
+        _send("Solo el administrador o quien creó la lista puede renombrarla.", chat_id=ctx["chat"])
+        return
+    _pending[ctx["chat"]] = {"action": "rename_list", "list_id": list_id}
+    _send(f"Escríbeme el nuevo nombre para «{esc(name)}»:", [[_btn("Cancelar", f"l:{list_id}")]], ctx["chat"])
+
+
+def _cb_list_delete(ctx, args, message_id):
+    with SessionLocal() as session:
+        wl = session.get(Watchlist, int(args[0]))
+        allowed = _can_delete_list(ctx, wl)
+    if not allowed:
+        _send("Solo el administrador o quien creó la lista puede eliminarla.", chat_id=ctx["chat"])
+        return
+    keyboard = [[_btn("Sí, eliminar", f"ldel2:{args[0]}"), _btn("No", f"l:{args[0]}")]]
+    _edit(ctx["chat"], message_id, "¿Eliminar la lista con todo su contenido?", keyboard)
+
+
+def _cb_list_delete_confirm(ctx, args, message_id):
+    with SessionLocal() as session:
+        wl = session.get(Watchlist, int(args[0]))
+        if _can_delete_list(ctx, wl):
+            session.delete(wl)
+            session.commit()
+    _lists_view(ctx, message_id)
+
+
+def _cb_share(ctx, args, message_id):
+    _share_view(ctx, int(args[0]), message_id)
+
+
+def _cb_share_toggle(ctx, args, message_id):
+    list_id, uid = int(args[0]), int(args[1])
+    with SessionLocal() as session:
+        wl = session.get(Watchlist, list_id)
+        user = session.get(BotUser, uid)
+        if wl and user and user.role == "user":
+            member = next((m for m in wl.memberships if m.user_id == uid), None)
+            if member:
+                services.unshare_list(session, member)
+            else:
+                services.share_list(session, wl, user)
+    scheduler.reschedule()
+    _share_view(ctx, list_id, message_id)
+
+
+def _cb_share_permission(ctx, args, message_id):
+    list_id, uid = int(args[0]), int(args[1])
+    with SessionLocal() as session:
+        wl = session.get(Watchlist, list_id)
+        member = next((m for m in wl.memberships if m.user_id == uid), None) if wl else None
+        if member:
+            services.toggle_member_edit(session, member)
+    _share_view(ctx, list_id, message_id)
+
+
+def _cb_stock(ctx, args, message_id):
+    _stock_view(ctx, int(args[0]), message_id)
+
+
+def _cb_stock_delete(ctx, args, message_id):
+    keyboard = [[_btn("Sí, quitar", f"sd2:{args[0]}"), _btn("No", f"s:{args[0]}")]]
+    _edit(ctx["chat"], message_id, "¿Quitar este valor de la lista?", keyboard)
+
+
+def _cb_stock_delete_confirm(ctx, args, message_id):
+    with SessionLocal() as session:
+        stock = _get_stock_checked(session, ctx, int(args[0]), edit=True)
+        list_id = stock.watchlist_id if stock else None
+        if stock:
+            session.delete(stock)
+            session.commit()
+    _list_view(ctx, list_id, message_id) if list_id else _lists_view(ctx, message_id)
+
+
+def _cb_add(ctx, args, message_id):
+    _pending[ctx["chat"]] = {"action": "search", "list_id": None}
+    _send("Escríbeme el nombre o ticker (ej: apple, SAN.MC, oro):", [[_btn("Cancelar", "menu")]], ctx["chat"])
+
+
+def _cb_add_to_list(ctx, args, message_id):
+    with SessionLocal() as session:
+        wl = session.get(Watchlist, int(args[0]))
+        allowed = _can_edit_list(ctx, wl)
+    if not allowed:
+        _send("En esta lista solo tienes permiso de lectura.", chat_id=ctx["chat"])
+        return
+    _pending[ctx["chat"]] = {"action": "search", "list_id": int(args[0])}
+    _send("Escríbeme el nombre o ticker (ej: apple, SAN.MC, oro):", [[_btn("Cancelar", "menu")]], ctx["chat"])
+
+
+def _cb_pick_list(ctx, args, message_id):
+    symbol = args[0]
+    with SessionLocal() as session:
+        watchlists = _editable_lists(session, ctx)
+        keyboard = _pick_list_keyboard(session, ctx, symbol)
+    if len(watchlists) == 1:
+        _add_stock(ctx, symbol, watchlists[0].id, message_id)
+    elif not watchlists:
+        _send("No tienes ninguna lista editable; crea una desde 📋 Mis listas.", chat_id=ctx["chat"])
+    else:
+        _edit(ctx["chat"], message_id, f"¿A qué lista añado <b>{symbol}</b>?", keyboard)
+
+
+def _cb_add_to(ctx, args, message_id):
+    _add_stock(ctx, args[0], int(args[1]), message_id)
+
+
+def _cb_alert_new(ctx, args, message_id):
+    with SessionLocal() as session:
+        allowed = _get_stock_checked(session, ctx, int(args[0]), edit=True) is not None
+    if not allowed:
+        return
+    keyboard = [
+        [_btn("⬆️ Si sube de…", f"alk:{args[0]}:above"), _btn("⬇️ Si baja de…", f"alk:{args[0]}:below")],
+        [_btn("Cancelar", f"s:{args[0]}")],
+    ]
+    _edit(ctx["chat"], message_id, "¿Qué tipo de alerta?", keyboard)
+
+
+def _cb_alert_kind(ctx, args, message_id):
+    _pending[ctx["chat"]] = {"action": "alert_price", "stock_id": int(args[0]), "kind": args[1]}
+    _send("Escríbeme el precio del umbral (ej: 150.50):", [[_btn("Cancelar", f"s:{args[0]}")]], ctx["chat"])
+
+
+def _alert_update(ctx, alert_id: int, rearm: bool, message_id):
+    with SessionLocal() as session:
+        alert = session.get(Alert, alert_id)
+        if alert and _can_edit_list(ctx, alert.stock.watchlist):
+            if rearm:
+                alert.active = True
+                alert.triggered_at = None
+            else:
+                session.delete(alert)
+            session.commit()
+    _alerts_view(ctx, message_id)
+
+
+def _cb_alert_delete(ctx, args, message_id):
+    _alert_update(ctx, int(args[0]), rearm=False, message_id=message_id)
+
+
+def _cb_alert_rearm(ctx, args, message_id):
+    _alert_update(ctx, int(args[0]), rearm=True, message_id=message_id)
+
+
+def _cb_alerts(ctx, args, message_id):
+    _alerts_view(ctx, message_id)
+
+
+def _cb_settings(ctx, args, message_id):
+    _settings_view(ctx, message_id)
+
+
+def _cb_users(ctx, args, message_id):
+    _users_view(ctx, message_id)
+
+
+def _cb_user_approve(ctx, args, message_id):
+    with SessionLocal() as session:
+        user = session.get(BotUser, int(args[0]))
+        if user and user.role == "pending":
+            services.approve_user(session, user)
+    scheduler.reschedule()  # programar los resúmenes del nuevo usuario
+    _users_view(ctx, message_id)
+
+
+def _cb_user_reject(ctx, args, message_id):
+    with SessionLocal() as session:
+        user = session.get(BotUser, int(args[0]))
+        if user and user.role == "pending":
+            chat = user.chat_id
+            session.delete(user)
+            session.commit()
+            _send("❌ Tu solicitud de acceso ha sido rechazada.", chat_id=chat)
+    _users_view(ctx, message_id)
+
+
+def _cb_user_delete(ctx, args, message_id):
+    keyboard = [[_btn("Sí, quitar acceso", f"udel2:{args[0]}"), _btn("No", "users")]]
+    _edit(ctx["chat"], message_id, "¿Quitar el acceso a este usuario? Sus listas pasarán a ti.", keyboard)
+
+
+def _cb_user_delete_confirm(ctx, args, message_id):
+    with SessionLocal() as session:
+        user = session.get(BotUser, int(args[0]))
+        if user and user.role == "user":
+            services.remove_user(session, user)
+    scheduler.reschedule()  # retirar los jobs de resumen del usuario
+    _users_view(ctx, message_id)
+
+
+def _cb_setting(ctx, args, message_id):
+    if args[0] in ("move", "interval") and not _is_admin(ctx):
+        return
+    prompts = {
+        "move": ("move", "Nuevo umbral de cambio brusco en % (ej: 5):"),
+        "interval": ("interval", "Cada cuántos minutos comprobar alertas (ej: 10):"),
+        "periodic": ("summary_interval", "Cada cuántos minutos te mando el resumen automático (0 para desactivarlo):"),
+        "summary": ("summary_time", "Hora de tu resumen diario en formato HH:MM (ej: 22:10):"),
+    }
+    key, prompt = prompts[args[0]]
+    _pending[ctx["chat"]] = {"action": key}
+    _send(prompt, [[_btn("Cancelar", "settings")]], ctx["chat"])
+
+
+def _cb_target(ctx, args, message_id):
+    _pending[ctx["chat"]] = {"action": "target", "stock_id": int(args[0])}
+    _send("Escríbeme el precio objetivo (o «quitar» para borrarlo):", [[_btn("Cancelar", f"s:{args[0]}")]], ctx["chat"])
+
+
+def _cb_notes(ctx, args, message_id):
+    _pending[ctx["chat"]] = {"action": "notes", "stock_id": int(args[0])}
+    _send("Escríbeme las notas para este valor (o «quitar» para borrarlas):", [[_btn("Cancelar", f"s:{args[0]}")]], ctx["chat"])
+
+
+def _cb_chart(ctx, args, message_id):
+    _send_chart(ctx["chat"], args[0], args[1] if len(args) > 1 else "6mo")
+
+
+def _cb_news(ctx, args, message_id):
+    _send_news(ctx["chat"], args[0])
+
+
+def _cb_summary(ctx, args, message_id):
+    if not alerts_mod.send_summary_to(ctx["chat"]):
+        _send("Aún no tienes listas con valores.", chat_id=ctx["chat"])
+
+
+CALLBACK_HANDLERS = {
+    "menu": _cb_menu,
+    "lists": _cb_lists,
+    "l": _cb_list,
+    "lnew": _cb_list_new,
+    "lren": _cb_list_rename,
+    "ldel": _cb_list_delete,
+    "ldel2": _cb_list_delete_confirm,
+    "lasg": _cb_share,
+    "lasgto": _cb_share_toggle,
+    "lperm": _cb_share_permission,
+    "s": _cb_stock,
+    "sd": _cb_stock_delete,
+    "sd2": _cb_stock_delete_confirm,
+    "add": _cb_add,
+    "addl": _cb_add_to_list,
+    "pick": _cb_pick_list,
+    "addto": _cb_add_to,
+    "alnew": _cb_alert_new,
+    "alk": _cb_alert_kind,
+    "ad": _cb_alert_delete,
+    "ar": _cb_alert_rearm,
+    "alerts": _cb_alerts,
+    "settings": _cb_settings,
+    "users": _cb_users,
+    "uok": _cb_user_approve,
+    "uno": _cb_user_reject,
+    "udel": _cb_user_delete,
+    "udel2": _cb_user_delete_confirm,
+    "set": _cb_setting,
+    "target": _cb_target,
+    "notes": _cb_notes,
+    "g": _cb_chart,
+    "n": _cb_news,
+    "summary": _cb_summary,
+}
+
+ADMIN_ONLY_ACTIONS = {"users", "uok", "uno", "udel", "udel2", "lasg", "lasgto", "lperm"}
+
+
 def _handle_callback(update: dict) -> None:
     query = update["callback_query"]
     chat_id = str(query.get("message", {}).get("chat", {}).get("id", ""))
@@ -554,212 +843,12 @@ def _handle_callback(update: dict) -> None:
     if not ctx:
         return
     message_id = query["message"]["message_id"]
-    data = query.get("data", "")
-    parts = data.split(":")
-    action, args = parts[0], parts[1:]
+    action, *args = query.get("data", "").split(":")
     _pending.pop(ctx["chat"], None)
-    admin_only = {"users", "uok", "uno", "udel", "udel2", "lasg", "lasgto", "lperm"}
-    if action in admin_only and not _is_admin(ctx):
+    handler = CALLBACK_HANDLERS.get(action)
+    if not handler or (action in ADMIN_ONLY_ACTIONS and not _is_admin(ctx)):
         return
-
-    if action == "menu":
-        _main_menu(ctx, message_id)
-    elif action == "lists":
-        _lists_view(ctx, message_id)
-    elif action == "l":
-        _list_view(ctx, int(args[0]), message_id)
-    elif action == "lnew":
-        _pending[ctx["chat"]] = {"action": "new_list"}
-        _send(
-            "Escríbeme el <b>nombre</b> de la nueva lista (solo el nombre — "
-            "los valores se añaden después con ➕ Añadir):",
-            [[_btn("Cancelar", "menu")]],
-            ctx["chat"],
-        )
-    elif action == "ldel":
-        with SessionLocal() as session:
-            wl = session.get(Watchlist, int(args[0]))
-            allowed = _can_delete_list(ctx, wl)
-        if not allowed:
-            _send("Solo el administrador o quien creó la lista puede eliminarla.", chat_id=ctx["chat"])
-            return
-        keyboard = [[_btn("Sí, eliminar", f"ldel2:{args[0]}"), _btn("No", f"l:{args[0]}")]]
-        _edit(ctx["chat"], message_id, "¿Eliminar la lista con todo su contenido?", keyboard)
-    elif action == "ldel2":
-        with SessionLocal() as session:
-            wl = session.get(Watchlist, int(args[0]))
-            if _can_delete_list(ctx, wl):
-                session.delete(wl)
-                session.commit()
-        _lists_view(ctx, message_id)
-    elif action == "lasg":
-        _share_view(ctx, int(args[0]), message_id)
-    elif action == "lasgto":
-        list_id, uid = int(args[0]), int(args[1])
-        with SessionLocal() as session:
-            wl = session.get(Watchlist, list_id)
-            user = session.get(BotUser, uid)
-            if wl and user and user.role == "user":
-                member = next((m for m in wl.memberships if m.user_id == uid), None)
-                if member:
-                    session.delete(member)
-                else:
-                    wl.memberships.append(WatchlistMember(user=user, can_edit=True))
-                    _send(
-                        f"📬 Te han compartido la lista «{esc(wl.name)}». Escribe /menu para verla.",
-                        chat_id=user.chat_id,
-                    )
-                session.commit()
-        scheduler.reschedule()
-        _share_view(ctx, list_id, message_id)
-    elif action == "lperm":
-        list_id, uid = int(args[0]), int(args[1])
-        with SessionLocal() as session:
-            wl = session.get(Watchlist, list_id)
-            member = next((m for m in wl.memberships if m.user_id == uid), None) if wl else None
-            if member:
-                member.can_edit = not member.can_edit
-                session.commit()
-                mode = "✏️ puedes editarla" if member.can_edit else "👁 es de solo lectura para ti"
-                _send(
-                    f"El administrador ha cambiado tu permiso en «{esc(wl.name)}»: {mode}.",
-                    chat_id=member.user.chat_id,
-                )
-        _share_view(ctx, list_id, message_id)
-    elif action == "s":
-        _stock_view(ctx, int(args[0]), message_id)
-    elif action == "sd":
-        keyboard = [[_btn("Sí, quitar", f"sd2:{args[0]}"), _btn("No", f"s:{args[0]}")]]
-        _edit(ctx["chat"], message_id, "¿Quitar este valor de la lista?", keyboard)
-    elif action == "sd2":
-        with SessionLocal() as session:
-            stock = _get_stock_checked(session, ctx, int(args[0]), edit=True)
-            list_id = stock.watchlist_id if stock else None
-            if stock:
-                session.delete(stock)
-                session.commit()
-        _list_view(ctx, list_id, message_id) if list_id else _lists_view(ctx, message_id)
-    elif action == "add":
-        _pending[ctx["chat"]] = {"action": "search", "list_id": None}
-        _send("Escríbeme el nombre o ticker (ej: apple, SAN.MC, oro):", [[_btn("Cancelar", "menu")]], ctx["chat"])
-    elif action == "addl":
-        with SessionLocal() as session:
-            wl = session.get(Watchlist, int(args[0]))
-            allowed = _can_edit_list(ctx, wl)
-        if not allowed:
-            _send("En esta lista solo tienes permiso de lectura.", chat_id=ctx["chat"])
-            return
-        _pending[ctx["chat"]] = {"action": "search", "list_id": int(args[0])}
-        _send("Escríbeme el nombre o ticker (ej: apple, SAN.MC, oro):", [[_btn("Cancelar", "menu")]], ctx["chat"])
-    elif action == "pick":
-        symbol = args[0]
-        with SessionLocal() as session:
-            watchlists = _editable_lists(session, ctx)
-            keyboard = _pick_list_keyboard(session, ctx, symbol)
-        if len(watchlists) == 1:
-            _add_stock(ctx, symbol, watchlists[0].id, message_id)
-        elif not watchlists:
-            _send("No tienes ninguna lista editable; crea una desde 📋 Mis listas.", chat_id=ctx["chat"])
-        else:
-            _edit(ctx["chat"], message_id, f"¿A qué lista añado <b>{symbol}</b>?", keyboard)
-    elif action == "addto":
-        _add_stock(ctx, args[0], int(args[1]), message_id)
-    elif action == "alnew":
-        with SessionLocal() as session:
-            allowed = _get_stock_checked(session, ctx, int(args[0]), edit=True) is not None
-        if not allowed:
-            return
-        keyboard = [
-            [_btn("⬆️ Si sube de…", f"alk:{args[0]}:above"), _btn("⬇️ Si baja de…", f"alk:{args[0]}:below")],
-            [_btn("Cancelar", f"s:{args[0]}")],
-        ]
-        _edit(ctx["chat"], message_id, "¿Qué tipo de alerta?", keyboard)
-    elif action == "alk":
-        _pending[ctx["chat"]] = {"action": "alert_price", "stock_id": int(args[0]), "kind": args[1]}
-        _send("Escríbeme el precio del umbral (ej: 150.50):", [[_btn("Cancelar", f"s:{args[0]}")]], ctx["chat"])
-    elif action in ("ad", "ar"):
-        with SessionLocal() as session:
-            alert = session.get(Alert, int(args[0]))
-            if alert and _can_edit_list(ctx, alert.stock.watchlist):
-                if action == "ad":
-                    session.delete(alert)
-                else:
-                    alert.active = True
-                    alert.triggered_at = None
-                session.commit()
-        _alerts_view(ctx, message_id)
-    elif action == "alerts":
-        _alerts_view(ctx, message_id)
-    elif action == "settings":
-        _settings_view(ctx, message_id)
-    elif action == "users":
-        _users_view(ctx, message_id)
-    elif action == "uok":
-        with SessionLocal() as session:
-            user = session.get(BotUser, int(args[0]))
-            if user and user.role == "pending":
-                user.role = "user"
-                session.commit()
-                _send(
-                    "✅ ¡Acceso concedido! Escribe /menu para empezar.\n\n"
-                    "ℹ️ Cómo funciona:\n"
-                    "• El administrador te asignará tu lista de valores (o crea una tuya "
-                    "con 📋 Mis listas → ➕ Nueva lista).\n"
-                    "• Para añadir un valor: entra en la lista → ➕ Añadir y escribe el "
-                    "nombre o ticker (apple, SAN.MC, oro…).\n"
-                    "• Recibirás aquí las alertas y resúmenes de tus listas.",
-                    chat_id=user.chat_id,
-                )
-        scheduler.reschedule()  # programar los resúmenes del nuevo usuario
-        _users_view(ctx, message_id)
-    elif action == "uno":
-        with SessionLocal() as session:
-            user = session.get(BotUser, int(args[0]))
-            if user and user.role == "pending":
-                chat = user.chat_id
-                session.delete(user)
-                session.commit()
-                _send("❌ Tu solicitud de acceso ha sido rechazada.", chat_id=chat)
-        _users_view(ctx, message_id)
-    elif action == "udel":
-        keyboard = [[_btn("Sí, quitar acceso", f"udel2:{args[0]}"), _btn("No", "users")]]
-        _edit(ctx["chat"], message_id, "¿Quitar el acceso a este usuario? Sus listas pasarán a ti.", keyboard)
-    elif action == "udel2":
-        with SessionLocal() as session:
-            user = session.get(BotUser, int(args[0]))
-            if user and user.role == "user":
-                admin = session.scalar(select(BotUser).where(BotUser.role == "admin"))
-                for wl in user.watchlists:
-                    wl.owner_id = admin.id
-                session.delete(user)  # sus membresías caen en cascada
-                session.commit()
-        scheduler.reschedule()  # retirar los jobs de resumen del usuario
-        _users_view(ctx, message_id)
-    elif action == "set":
-        if args[0] in ("move", "interval") and not _is_admin(ctx):
-            return
-        prompts = {
-            "move": ("move", "Nuevo umbral de cambio brusco en % (ej: 5):"),
-            "interval": ("interval", "Cada cuántos minutos comprobar alertas (ej: 10):"),
-            "periodic": ("summary_interval", "Cada cuántos minutos te mando el resumen automático (0 para desactivarlo):"),
-            "summary": ("summary_time", "Hora de tu resumen diario en formato HH:MM (ej: 22:10):"),
-        }
-        key, prompt = prompts[args[0]]
-        _pending[ctx["chat"]] = {"action": key}
-        _send(prompt, [[_btn("Cancelar", "settings")]], ctx["chat"])
-    elif action == "target":
-        _pending[ctx["chat"]] = {"action": "target", "stock_id": int(args[0])}
-        _send("Escríbeme el precio objetivo (o «quitar» para borrarlo):", [[_btn("Cancelar", f"s:{args[0]}")]], ctx["chat"])
-    elif action == "notes":
-        _pending[ctx["chat"]] = {"action": "notes", "stock_id": int(args[0])}
-        _send("Escríbeme las notas para este valor (o «quitar» para borrarlas):", [[_btn("Cancelar", f"s:{args[0]}")]], ctx["chat"])
-    elif action == "g":
-        _send_chart(ctx["chat"], args[0], args[1] if len(args) > 1 else "6mo")
-    elif action == "n":
-        _send_news(ctx["chat"], args[0])
-    elif action == "summary":
-        if not alerts_mod.send_summary_to(ctx["chat"]):
-            _send("Aún no tienes listas con valores.", chat_id=ctx["chat"])
+    handler(ctx, args, message_id)
 
 
 def _parse_number(text: str) -> float | None:
@@ -793,17 +882,23 @@ def _handle_pending(ctx: dict, text: str) -> bool:
                 chat_id=chat,
             )
         with SessionLocal() as session:
-            if session.scalar(select(Watchlist).where(Watchlist.name == name)):
-                _send(f"Ya existe una lista llamada «{esc(name)}».", chat_id=chat)
-            else:
-                wl = Watchlist(name=name, owner_id=ctx["uid"])
-                if not _is_admin(ctx):
-                    user = session.get(BotUser, ctx["uid"])
-                    # quien la crea la ve y puede editarla
-                    wl.memberships.append(WatchlistMember(user=user, can_edit=True))
-                session.add(wl)
-                session.commit()
+            creator = session.get(BotUser, ctx["uid"])
+            _, error = services.create_list(session, name, creator)
+        if error:
+            _send(esc(error), chat_id=chat)
         _lists_view(ctx)
+    elif action == "rename_list":
+        name = text.strip().splitlines()[0]
+        with SessionLocal() as session:
+            wl = session.get(Watchlist, pending["list_id"])
+            if not wl or not _can_delete_list(ctx, wl):
+                _send("Esa lista ya no existe o no puedes renombrarla.", chat_id=chat)
+                return True
+            error = services.rename_list(session, wl, name)
+        if error:
+            _send(esc(error), chat_id=chat)
+            return True
+        _list_view(ctx, pending["list_id"])
     elif action == "alert_price":
         value = _parse_number(text)
         if value is None or value <= 0:
@@ -958,7 +1053,7 @@ class _Poller(threading.Thread):
         log.info("Bot de Telegram escuchando (long polling)")
         while not _stop_event.is_set():
             try:
-                resp = httpx.get(
+                resp = _client.get(
                     API.format(token=config.TELEGRAM_BOT_TOKEN, method="getUpdates"),
                     params={"timeout": 25, "offset": offset},
                     timeout=35,
@@ -981,7 +1076,7 @@ class _Poller(threading.Thread):
     def _skip_backlog() -> int:
         """Descarta los mensajes acumulados antes de arrancar."""
         try:
-            resp = httpx.get(
+            resp = _client.get(
                 API.format(token=config.TELEGRAM_BOT_TOKEN, method="getUpdates"),
                 params={"offset": -1, "timeout": 0},
                 timeout=15,

@@ -1,0 +1,3 @@
+# Dependencias solo para desarrollo: pip install -r requirements-dev.txt
+-r requirements.txt
+pytest==8.4.2

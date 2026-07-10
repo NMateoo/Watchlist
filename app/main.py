@@ -13,7 +13,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 
 from app import alerts as alerts_mod
-from app import bot, config, prices, scheduler, telegram
+from app import bot, config, prices, scheduler, services, telegram
 from app.database import (
     Alert,
     BotUser,
@@ -110,35 +110,16 @@ def index(request: Request, list_id: int | None = Query(None, alias="list")):
 
 @app.post("/stocks/add")
 def add_stock(ticker: str = Form(...), watchlist_id: int = Form(...)):
-    ticker = ticker.strip().upper()
     home = f"/?list={watchlist_id}"
-    if not ticker:
-        return redirect(home, err="Escribe un ticker.")
     with SessionLocal() as session:
-        if not session.get(Watchlist, watchlist_id):
+        wl = session.get(Watchlist, watchlist_id)
+        if not wl:
             return redirect("/", err="Esa lista ya no existe.")
-        exists = session.scalar(
-            select(Stock).where(Stock.ticker == ticker, Stock.watchlist_id == watchlist_id)
-        )
-        if exists:
-            return redirect(home, err=f"{ticker} ya está en esta lista.")
-        quote_data = prices.get_quote(ticker)
-        if not quote_data:
-            return redirect(
-                home,
-                err=f"No encuentro '{ticker}' en Yahoo Finance. "
-                "Recuerda los sufijos: SAN.MC (Madrid), BTC-USD (cripto), GC=F (futuros).",
-            )
-        session.add(
-            Stock(
-                ticker=ticker,
-                watchlist_id=watchlist_id,
-                name=prices.lookup_name(ticker),
-                currency=quote_data["currency"],
-            )
-        )
-        session.commit()
-    return redirect(home, msg=f"{ticker} añadido a la lista.")
+        stock, error = services.add_stock(session, wl, ticker)
+        if error:
+            return redirect(home, err=error)
+        added = stock.ticker
+    return redirect(home, msg=f"{added} añadido a la lista.")
 
 
 @app.post("/api/stocks/{stock_id}/delete")
@@ -157,17 +138,23 @@ def api_delete_stock(stock_id: int):
 
 @app.post("/lists/add")
 def add_list(name: str = Form(...)):
-    name = name.strip()[:60]
-    if not name:
-        return redirect("/", err="La lista necesita un nombre.")
     with SessionLocal() as session:
-        if session.scalar(select(Watchlist).where(Watchlist.name == name)):
-            return redirect("/", err=f"Ya existe una lista llamada '{name}'.")
-        admin = session.scalar(select(BotUser).where(BotUser.role == "admin"))
-        wl = Watchlist(name=name, owner_id=admin.id if admin else None)
-        session.add(wl)
-        session.commit()
-        return redirect(f"/?list={wl.id}", msg=f"Lista '{name}' creada.")
+        wl, error = services.create_list(session, name, services.get_admin(session))
+        if error:
+            return redirect("/", err=error)
+        return redirect(f"/?list={wl.id}", msg=f"Lista '{wl.name}' creada.")
+
+
+@app.post("/lists/{list_id}/rename")
+def rename_list(list_id: int, name: str = Form(...)):
+    with SessionLocal() as session:
+        wl = session.get(Watchlist, list_id)
+        if not wl:
+            return redirect("/", err="Esa lista ya no existe.")
+        error = services.rename_list(session, wl, name)
+        if error:
+            return redirect(f"/?list={list_id}", err=error)
+        return redirect(f"/?list={list_id}", msg=f"Lista renombrada a '{wl.name}'.")
 
 
 @app.post("/lists/{list_id}/delete")
@@ -187,13 +174,7 @@ def add_member(list_id: int, user_id: int = Form(...)):
         user = session.get(BotUser, user_id)
         if not wl or not user or user.role != "user":
             return redirect("/", err="Lista o usuario no válidos.")
-        if not any(m.user_id == user.id for m in wl.memberships):
-            wl.memberships.append(WatchlistMember(user=user, can_edit=True))
-            session.commit()
-            telegram.send_message(
-                f"📬 Te han compartido la lista «{wl.name}». Escribe /menu para verla.",
-                chat_id=user.chat_id,
-            )
+        services.share_list(session, wl, user)
         name = user.name
     scheduler.reschedule()
     return redirect(f"/?list={list_id}", msg=f"Lista compartida con {name}.")
@@ -204,8 +185,7 @@ def remove_member(list_id: int, user_id: int):
     with SessionLocal() as session:
         member = session.get(WatchlistMember, (list_id, user_id))
         if member:
-            session.delete(member)
-            session.commit()
+            services.unshare_list(session, member)
     scheduler.reschedule()
     return redirect(f"/?list={list_id}", msg="Usuario quitado de la lista.")
 
@@ -216,14 +196,8 @@ def toggle_member_edit(list_id: int, user_id: int):
         member = session.get(WatchlistMember, (list_id, user_id))
         if not member:
             return redirect(f"/?list={list_id}", err="Ese usuario no está en la lista.")
-        member.can_edit = not member.can_edit
-        session.commit()
-        mode = "✏️ puedes editarla" if member.can_edit else "👁 es de solo lectura para ti"
-        telegram.send_message(
-            f"El administrador ha cambiado tu permiso en «{member.watchlist.name}»: {mode}.",
-            chat_id=member.user.chat_id,
-        )
-        label = "puede editar" if member.can_edit else "solo lectura"
+        can_edit = services.toggle_member_edit(session, member)
+        label = "puede editar" if can_edit else "solo lectura"
         name = member.user.name
     return redirect(f"/?list={list_id}", msg=f"{name}: {label}.")
 
@@ -256,11 +230,7 @@ def approve_user(user_id: int):
         user = session.get(BotUser, user_id)
         if not user or user.role != "pending":
             return redirect("/users", err="Ese usuario no está pendiente.")
-        user.role = "user"
-        session.commit()
-        telegram.send_message(
-            "✅ ¡Acceso concedido! Escribe /menu para empezar.", chat_id=user.chat_id
-        )
+        services.approve_user(session, user)
         name = user.name
     scheduler.reschedule()
     return redirect("/users", msg=f"{name} aprobado.")
@@ -272,11 +242,7 @@ def delete_user(user_id: int):
         user = session.get(BotUser, user_id)
         if not user or user.role == "admin":
             return redirect("/users", err="No se puede eliminar ese usuario.")
-        admin = session.scalar(select(BotUser).where(BotUser.role == "admin"))
-        for wl in user.watchlists:
-            wl.owner_id = admin.id if admin else None
-        session.delete(user)  # sus membresías caen en cascada
-        session.commit()
+        services.remove_user(session, user)
     scheduler.reschedule()
     return redirect("/users", msg="Usuario eliminado.")
 
@@ -292,7 +258,8 @@ def _alerts_json(session, stock_id: int) -> list[dict]:
             "kind": a.kind,
             "threshold": a.threshold,
             "active": a.active,
-            "triggered_at": a.triggered_at.strftime("%d/%m %H:%M") if a.triggered_at else None,
+            "triggered_at": alerts_mod.to_local(a.triggered_at).strftime("%d/%m %H:%M")
+            if a.triggered_at else None,
         }
         for a in sorted(stock.alerts, key=lambda a: a.created_at, reverse=True)
     ]
@@ -343,18 +310,18 @@ def api_history(ticker: str, period: str = "6mo"):
 
 @app.get("/api/quotes")
 def api_quotes():
-    """Cotizaciones frescas de toda la watchlist, para el refresco en vivo."""
+    """Cotizaciones de toda la watchlist para el refresco en vivo. Se sirven de
+    la caché: un job del scheduler la mantiene fresca mientras haya polls."""
+    prices.mark_ui_activity()
     with SessionLocal() as session:
         tickers = list(session.scalars(select(Stock.ticker)))
-        refresh = get_refresh_seconds(session)
-    return prices.get_quotes(tickers, max_age=max(3, refresh - 1))
+    return prices.get_quotes(tickers)
 
 
 @app.get("/api/quote/{ticker}")
 def api_quote(ticker: str):
-    with SessionLocal() as session:
-        refresh = get_refresh_seconds(session)
-    quote = prices.get_quote(ticker.upper(), max_age=max(3, refresh - 1))
+    prices.mark_ui_activity()
+    quote = prices.get_quote(ticker.upper())
     return quote or JSONResponse({"error": "sin datos"}, status_code=404)
 
 
@@ -466,6 +433,7 @@ def save_refresh_seconds(refresh_seconds: str = Form(...)):
     with SessionLocal() as session:
         set_setting(session, "ui_refresh_seconds", str(value))
         session.commit()
+    scheduler.reschedule()  # el job que refresca la caché usa este intervalo
     return redirect("/settings", msg=f"La web actualizará precios cada {value} s.")
 
 
@@ -489,4 +457,4 @@ def health():
             {"id": j.id, "next": j.next_run_time.strftime("%d %H:%M:%S") if j.next_run_time else None}
             for j in scheduler.scheduler.get_jobs()
         ]
-    return {"status": "ok", "v": 11, "scheduler": scheduler.scheduler.running, "jobs": jobs}
+    return {"status": "ok", "v": 12, "scheduler": scheduler.scheduler.running, "jobs": jobs}

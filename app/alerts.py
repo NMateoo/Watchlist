@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from html import escape as esc
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app import config, prices, telegram
 from app.database import (
@@ -41,15 +41,31 @@ def _local_today() -> str:
     return datetime.now(ZoneInfo(config.TIMEZONE)).strftime("%Y-%m-%d")
 
 
+def to_local(dt: datetime) -> datetime:
+    """Convierte un datetime guardado en UTC (naive o aware) a la zona configurada."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(ZoneInfo(config.TIMEZONE))
+
+
 def _recipient_chats(stock: Stock) -> list[str | None]:
-    """Chats de los miembros de la lista del valor; sin miembros → admin (None)."""
+    """Chats de los miembros de la lista del valor, más siempre el admin (None):
+    aunque comparta una lista suya, el admin sigue recibiendo sus avisos."""
     members = stock.watchlist.members if stock.watchlist else []
-    return [m.chat_id for m in members] or [None]
+    return [None] + [m.chat_id for m in members]
+
+
+def _purge_old_notices(session) -> None:
+    """Borra avisos de cambio brusco de hace más de una semana (la tabla solo
+    sirve para no repetir el aviso del día; sin purga crecería para siempre)."""
+    cutoff = (datetime.now(ZoneInfo(config.TIMEZONE)) - timedelta(days=7)).strftime("%Y-%m-%d")
+    session.execute(delete(MoveNotice).where(MoveNotice.day < cutoff))
 
 
 def check_alerts() -> None:
     """Job principal: comprueba umbrales y cambios bruscos de todas las listas."""
     with session_scope() as session:
+        _purge_old_notices(session)
         stocks = session.scalars(select(Stock)).all()
         if not stocks:
             return

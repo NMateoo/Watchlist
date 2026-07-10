@@ -11,6 +11,9 @@ log = logging.getLogger(__name__)
 
 API_URL = "https://api.telegram.org/bot{token}/{method}"
 
+# Cliente HTTP compartido: reutiliza conexiones en vez de abrir una por mensaje.
+_client = httpx.Client()
+
 
 def is_configured() -> bool:
     return bool(config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID)
@@ -29,7 +32,7 @@ def send_message(text: str, chat_id: str | None = None) -> bool:
         "disable_web_page_preview": True,
     }
     try:
-        resp = httpx.post(url, json=payload, timeout=15)
+        resp = _client.post(url, json=payload, timeout=15)
         if resp.status_code != 200:
             log.error("Telegram respondió %s: %s", resp.status_code, resp.text)
             return False
@@ -45,7 +48,7 @@ def get_chat_id_hint() -> str | None:
         return None
     url = API_URL.format(token=config.TELEGRAM_BOT_TOKEN, method="getUpdates")
     try:
-        data = httpx.get(url, timeout=15).json()
+        data = _client.get(url, timeout=15).json()
         for update in reversed(data.get("result", [])):
             chat = update.get("message", {}).get("chat")
             if chat:

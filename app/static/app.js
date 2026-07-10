@@ -1,6 +1,6 @@
 // Utilidades compartidas: formateo, buscador con sugerencias y precios en vivo.
 
-const CURRENCY_SYMBOLS = { USD: '$', EUR: '€', GBP: '£' };
+const CURRENCY_SYMBOLS = { USD: '$', EUR: '€', GBP: '£', GBp: 'p' };
 const numberFmt = new Intl.NumberFormat('es-ES', {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,

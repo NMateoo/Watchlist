@@ -3,7 +3,8 @@
 Monitoriza tus acciones, ETFs y cripto desde una web y recibe alertas en Telegram:
 
 - ⚡ **Precios en vivo** — el dashboard se actualiza solo cada pocos segundos (configurable en Ajustes, mínimo 5 s), incluyendo pre-market y after-hours, con indicador del estado del mercado.
-- 🗂️ **Varias listas de seguimiento** — organiza tus valores en pestañas.
+- 🗂️ **Varias listas de seguimiento** — organiza tus valores en pestañas; créalas, renómbralas
+  y elimínalas desde la web o el bot.
 - 🔎 **Buscador con sugerencias** — escribe "apple", "santander", "oro" o "eurusd" y elige el ticker. Incluye materias primas: metales spot (`XAUUSD`, `XAGUSD`, `XPTUSD`, `XPDUSD`, vía gold-api.com) y futuros (`GC=F`, `CL=F`).
 - 🔔 **Alertas de precio** — te avisa cuando un valor cruza un umbral que definas.
 - ⚡ **Cambios bruscos** — aviso si algo se mueve más de X% en el día (una vez al día por valor).
@@ -24,6 +25,13 @@ y ETFs (`SPY`).
 python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
 .venv\Scripts\python -m uvicorn app.main:app --port 8000
+```
+
+Para desarrollar, instala también las dependencias de test y ejecútalos con:
+
+```powershell
+.venv\Scripts\pip install -r requirements-dev.txt
+.venv\Scripts\pytest
 ```
 
 Crea un archivo `.env` en la raíz con tus claves (ver tabla de variables más abajo):
