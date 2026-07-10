@@ -31,8 +31,8 @@ from app.database import (
     Watchlist,
     get_check_interval,
     get_move_threshold,
-    get_summary_interval,
-    get_summary_time,
+    get_user_summary_prefs,
+    normalize_time,
     set_setting,
 )
 
@@ -180,6 +180,8 @@ def _main_menu(ctx: dict, message_id: int | None = None) -> None:
     ]
     if _is_admin(ctx):
         keyboard.append([_btn("⚙️ Ajustes", "settings"), _btn("👥 Usuarios", "users")])
+    else:
+        keyboard.append([_btn("⚙️ Mis resúmenes", "settings")])
     greeting = "" if _is_admin(ctx) else f"\nHola, {esc(ctx['name'])} 👋"
     _show(ctx, f"<b>📈 Watchlist</b>{greeting}\n¿Qué quieres hacer?", keyboard, message_id)
 
@@ -330,24 +332,32 @@ def _settings_view(ctx: dict, message_id: int | None = None) -> None:
     with SessionLocal() as session:
         move = get_move_threshold(session)
         interval = get_check_interval(session)
-        summary = get_summary_time(session)
-        periodic = get_summary_interval(session)
+        user = session.get(BotUser, ctx["uid"])
+        periodic, summary = get_user_summary_prefs(session, user)
     periodic_txt = f"cada <b>{periodic} min</b>" if periodic else "<b>desactivado</b>"
-    text = (
-        "<b>⚙️ Ajustes</b> (globales)\n"
-        f"⚡ Aviso de cambio brusco: <b>±{move}%</b>\n"
-        f"⏱ Comprobación de alertas: cada <b>{interval} min</b>\n"
-        f"📊 Resumen automático: {periodic_txt}\n"
-        f"🕙 Resumen diario: a las <b>{summary}</b> ({config.TIMEZONE})"
-    )
-    keyboard = [
-        [_btn("⚡ Cambiar umbral %", "set:move")],
-        [_btn("⏱ Cambiar intervalo alertas", "set:interval")],
+    lines = ["<b>⚙️ Ajustes</b>"]
+    keyboard = []
+    if _is_admin(ctx):
+        lines += [
+            "\n<u>Globales (para todos)</u>",
+            f"⚡ Aviso de cambio brusco: <b>±{move}%</b>",
+            f"⏱ Comprobación de alertas: cada <b>{interval} min</b>",
+        ]
+        keyboard += [
+            [_btn("⚡ Cambiar umbral %", "set:move")],
+            [_btn("⏱ Cambiar intervalo alertas", "set:interval")],
+        ]
+    lines += [
+        "\n<u>Tus resúmenes</u>",
+        f"📊 Resumen automático: {periodic_txt}",
+        f"🕙 Resumen diario: a las <b>{summary}</b> ({config.TIMEZONE})",
+    ]
+    keyboard += [
         [_btn("📊 Cambiar resumen automático", "set:periodic")],
         [_btn("🕙 Cambiar hora resumen diario", "set:summary")],
         [_btn("◀️ Menú", "menu")],
     ]
-    _show(ctx, text, keyboard, message_id)
+    _show(ctx, "\n".join(lines), keyboard, message_id)
 
 
 def _users_view(ctx: dict, message_id: int | None = None) -> None:
@@ -479,7 +489,7 @@ def _handle_callback(update: dict) -> None:
     parts = data.split(":")
     action, args = parts[0], parts[1:]
     _pending.pop(ctx["chat"], None)
-    admin_only = {"settings", "set", "users", "uok", "uno", "udel", "lasg", "lasgto"}
+    admin_only = {"users", "uok", "uno", "udel", "udel2", "lasg", "lasgto"}
     if action in admin_only and not _is_admin(ctx):
         return
 
@@ -602,6 +612,7 @@ def _handle_callback(update: dict) -> None:
                     "• Recibirás aquí las alertas y resúmenes de tus listas.",
                     chat_id=user.chat_id,
                 )
+        scheduler.reschedule()  # programar los resúmenes del nuevo usuario
         _users_view(ctx, message_id)
     elif action == "uno":
         with SessionLocal() as session:
@@ -624,13 +635,16 @@ def _handle_callback(update: dict) -> None:
                     wl.owner_id = admin.id
                 session.delete(user)
                 session.commit()
+        scheduler.reschedule()  # retirar los jobs de resumen del usuario
         _users_view(ctx, message_id)
     elif action == "set":
+        if args[0] in ("move", "interval") and not _is_admin(ctx):
+            return
         prompts = {
             "move": ("move", "Nuevo umbral de cambio brusco en % (ej: 5):"),
             "interval": ("interval", "Cada cuántos minutos comprobar alertas (ej: 10):"),
-            "periodic": ("summary_interval", "Cada cuántos minutos mando el resumen automático (0 para desactivarlo):"),
-            "summary": ("summary_time", "Hora del resumen diario en formato HH:MM (ej: 22:10):"),
+            "periodic": ("summary_interval", "Cada cuántos minutos te mando el resumen automático (0 para desactivarlo):"),
+            "summary": ("summary_time", "Hora de tu resumen diario en formato HH:MM (ej: 22:10):"),
         }
         key, prompt = prompts[args[0]]
         _pending[ctx["chat"]] = {"action": key}
@@ -744,17 +758,20 @@ def _handle_pending(ctx: dict, text: str) -> bool:
             _send("Debe ser un número de minutos entre 0 (desactivado) y 1440.", chat_id=chat)
             return True
         with SessionLocal() as session:
-            set_setting(session, "summary_interval_minutes", str(int(value)))
+            user = session.get(BotUser, ctx["uid"])
+            user.summary_interval = int(value)
             session.commit()
         scheduler.reschedule()
         _settings_view(ctx)
     elif action == "summary_time":
+        normalized = normalize_time(text)
+        if not normalized:
+            _send(f"No entendí «{esc(text.strip())}». Usa el formato HH:MM (ej: 22:10).", chat_id=chat)
+            return True
         with SessionLocal() as session:
-            set_setting(session, "daily_summary_time", text.strip())
+            user = session.get(BotUser, ctx["uid"])
+            user.summary_time = normalized
             session.commit()
-            saved = get_summary_time(session)
-        if saved != text.strip():
-            _send(f"No entendí «{esc(text.strip())}»; queda a las {saved}. Usa el formato HH:MM.", chat_id=chat)
         scheduler.reschedule()
         _settings_view(ctx)
     return True

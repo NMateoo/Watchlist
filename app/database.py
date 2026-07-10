@@ -48,6 +48,9 @@ class BotUser(Base):
     chat_id: Mapped[str] = mapped_column(String(32), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(80), default="")
     role: Mapped[str] = mapped_column(String(10), default="pending")  # admin | user | pending
+    # Preferencias de resúmenes; NULL → usar el valor global de settings.
+    summary_interval: Mapped[int | None] = mapped_column(nullable=True)
+    summary_time: Mapped[str | None] = mapped_column(String(5), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     watchlists: Mapped[list["Watchlist"]] = relationship(back_populates="owner")
@@ -136,6 +139,10 @@ def init_db() -> None:
     needs_chat = inspector.has_table("move_notices") and "chat_id" not in [
         c["name"] for c in inspector.get_columns("move_notices")
     ]
+    # Migración v3 → v4: preferencias de resúmenes por usuario.
+    needs_prefs = inspector.has_table("bot_users") and "summary_interval" not in [
+        c["name"] for c in inspector.get_columns("bot_users")
+    ]
     Base.metadata.create_all(engine)
     if needs_v2:
         with engine.begin() as conn:
@@ -155,6 +162,10 @@ def init_db() -> None:
     if needs_chat:
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE move_notices ADD COLUMN chat_id VARCHAR(32)"))
+    if needs_prefs:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE bot_users ADD COLUMN summary_interval INTEGER"))
+            conn.execute(text("ALTER TABLE bot_users ADD COLUMN summary_time VARCHAR(5)"))
 
 
 def ensure_admin() -> None:
@@ -233,12 +244,28 @@ def get_summary_interval(session) -> int:
     return min(max(value, 0), 1440)
 
 
-def get_summary_time(session) -> str:
-    """Hora HH:MM del resumen diario."""
-    value = get_setting(session, "daily_summary_time", config.DAILY_SUMMARY_TIME)
-    parts = value.split(":")
+def normalize_time(value: str | None) -> str | None:
+    """'9:5' → '09:05'; None si no es una hora válida."""
+    parts = (value or "").strip().split(":")
     if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
         hour, minute = int(parts[0]), int(parts[1])
         if 0 <= hour < 24 and 0 <= minute < 60:
             return f"{hour:02d}:{minute:02d}"
-    return "22:10"
+    return None
+
+
+def get_summary_time(session) -> str:
+    """Hora HH:MM del resumen diario (valor global por defecto)."""
+    value = get_setting(session, "daily_summary_time", config.DAILY_SUMMARY_TIME)
+    return normalize_time(value) or "22:10"
+
+
+def get_user_summary_prefs(session, user) -> tuple[int, str]:
+    """(minutos entre resúmenes automáticos, hora del diario) de un usuario.
+    Si no ha configurado nada, usa los valores globales."""
+    interval = user.summary_interval
+    if interval is None:
+        interval = get_summary_interval(session)
+    interval = min(max(int(interval), 0), 1440)
+    stime = normalize_time(user.summary_time) or get_summary_time(session)
+    return interval, stime

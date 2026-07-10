@@ -141,17 +141,6 @@ def _summary_line(info: dict, quote: dict | None) -> str:
     return line
 
 
-def send_daily_summary() -> None:
-    """Manda a cada usuario del bot el resumen de SUS listas."""
-    with session_scope() as session:
-        users = session.scalars(
-            select(BotUser).where(BotUser.role.in_(("admin", "user")))
-        ).all()
-        chats = [u.chat_id for u in users]
-    for chat in chats:
-        send_summary_to(chat)
-
-
 def send_summary_to(chat_id: str | None) -> bool:
     """Resumen de las listas de un usuario: variación, distancia al máximo de
     52 semanas, precio objetivo, alertas activas y estado del mercado."""

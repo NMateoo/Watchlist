@@ -51,8 +51,9 @@
   <h2>Programación</h2>
   <ul class="plain">
     <li>Comprobación de alertas: cada <b>{{ check_interval }} min</b></li>
-    <li>Resumen diario: a las <b>{{ summary_time }}</b> ({{ timezone }})</li>
+    <li>Resumen diario (por defecto): a las <b>{{ summary_time }}</b> ({{ timezone }})</li>
   </ul>
-  <p class="hint">Estos dos se cambian desde el bot de Telegram: <code>/menu</code> → ⚙️ Ajustes.</p>
+  <p class="hint">Se cambian desde el bot: <code>/menu</code> → ⚙️ Ajustes.
+     Cada usuario del bot configura ahí la frecuencia y hora de sus propios resúmenes.</p>
 </section>
 {% endblock %}
