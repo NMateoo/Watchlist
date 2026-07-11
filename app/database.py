@@ -1,6 +1,7 @@
 """Modelos y sesión de base de datos (SQLAlchemy 2.0)."""
 from __future__ import annotations
 
+import logging
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
@@ -25,6 +26,8 @@ from sqlalchemy.orm import (
 )
 
 from app import config
+
+log = logging.getLogger(__name__)
 
 connect_args = {"check_same_thread": False} if config.DATABASE_URL.startswith("sqlite") else {}
 engine = create_engine(config.DATABASE_URL, connect_args=connect_args, pool_pre_ping=True)
@@ -178,79 +181,94 @@ class Setting(Base):
     value: Mapped[str] = mapped_column(String(200))
 
 
+# Migraciones numeradas: cada entrada lleva la base de datos de la versión
+# N-1 a la N. La versión aplicada se guarda en settings ("schema_version") y
+# al arrancar se ejecutan solo las que falten. Para cambiar el esquema en el
+# futuro: añadir aquí una entrada nueva con sus sentencias SQL y listo (las
+# tablas NUEVAS no necesitan migración: create_all las crea solas).
+_MIGRATIONS: dict[int, list[str]] = {
+    # v2: los valores pasan a organizarse en listas.
+    2: [
+        "INSERT INTO watchlists (id, name, created_at) VALUES (1, 'Mi lista', CURRENT_TIMESTAMP)",
+        "DROP INDEX IF EXISTS ix_stocks_ticker",
+        "ALTER TABLE stocks ADD COLUMN watchlist_id INTEGER REFERENCES watchlists(id)",
+        "UPDATE stocks SET watchlist_id = 1",
+        "CREATE INDEX IF NOT EXISTS ix_stocks_ticker ON stocks (ticker)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_stocks_ticker_list ON stocks (ticker, watchlist_id)",
+    ],
+    # v3: multi-usuario (dueño en listas y chat en avisos de cambio brusco).
+    3: [
+        "ALTER TABLE watchlists ADD COLUMN owner_id INTEGER REFERENCES bot_users(id)",
+        "ALTER TABLE move_notices ADD COLUMN chat_id VARCHAR(32)",
+    ],
+    # v4: preferencias de resúmenes por usuario.
+    4: [
+        "ALTER TABLE bot_users ADD COLUMN summary_interval INTEGER",
+        "ALTER TABLE bot_users ADD COLUMN summary_time VARCHAR(5)",
+    ],
+    # v5: listas compartidas — las asignaciones antiguas pasan a membresías.
+    5: [
+        "INSERT INTO watchlist_members (watchlist_id, user_id) "
+        "SELECT w.id, w.owner_id FROM watchlists w "
+        "JOIN bot_users u ON u.id = w.owner_id WHERE u.role != 'admin'",
+    ],
+    # v6: permiso de edición por miembro.
+    6: ["ALTER TABLE watchlist_members ADD COLUMN can_edit BOOLEAN NOT NULL DEFAULT TRUE"],
+    # v7: posición (cantidad/precio de compra) y alertas recurrentes.
+    7: [
+        "ALTER TABLE stocks ADD COLUMN quantity FLOAT",
+        "ALTER TABLE stocks ADD COLUMN buy_price FLOAT",
+        "ALTER TABLE alerts ADD COLUMN repeat BOOLEAN NOT NULL DEFAULT FALSE",
+    ],
+}
+SCHEMA_VERSION = max(_MIGRATIONS)
+
+
+def _detect_legacy_version(inspector) -> int:
+    """Versión de una base de datos anterior a que existiera schema_version,
+    deducida mirando qué columnas/tablas tiene (como hacía el init_db viejo)."""
+
+    def has_column(table: str, column: str) -> bool:
+        return inspector.has_table(table) and column in {
+            c["name"] for c in inspector.get_columns(table)
+        }
+
+    if not has_column("stocks", "watchlist_id"):
+        return 1
+    if not has_column("watchlists", "owner_id"):
+        return 2
+    if not has_column("bot_users", "summary_interval"):
+        return 3
+    if not inspector.has_table("watchlist_members"):
+        return 4
+    if not has_column("watchlist_members", "can_edit"):
+        return 5
+    if not has_column("stocks", "quantity"):
+        return 6
+    return SCHEMA_VERSION
+
+
 def init_db() -> None:
     inspector = inspect(engine)
-    # Migración v1 → v2 (sin listas): añadir watchlist_id a stocks.
-    needs_v2 = inspector.has_table("stocks") and "watchlist_id" not in [
-        c["name"] for c in inspector.get_columns("stocks")
-    ]
-    # Migración v2 → v3 (multi-usuario): owner en listas y chat en avisos.
-    needs_owner = inspector.has_table("watchlists") and "owner_id" not in [
-        c["name"] for c in inspector.get_columns("watchlists")
-    ]
-    needs_chat = inspector.has_table("move_notices") and "chat_id" not in [
-        c["name"] for c in inspector.get_columns("move_notices")
-    ]
-    # Migración v3 → v4: preferencias de resúmenes por usuario.
-    needs_prefs = inspector.has_table("bot_users") and "summary_interval" not in [
-        c["name"] for c in inspector.get_columns("bot_users")
-    ]
-    # Migración v4 → v5: listas compartidas con varios usuarios.
-    needs_members = inspector.has_table("watchlists") and not inspector.has_table("watchlist_members")
-    # Migración v5 → v6: permiso de edición por miembro.
-    needs_can_edit = inspector.has_table("watchlist_members") and "can_edit" not in [
-        c["name"] for c in inspector.get_columns("watchlist_members")
-    ]
-    # Migración v6 → v7: posición (cantidad/precio de compra) y alertas recurrentes.
-    needs_position = inspector.has_table("stocks") and "quantity" not in [
-        c["name"] for c in inspector.get_columns("stocks")
-    ]
-    needs_repeat = inspector.has_table("alerts") and "repeat" not in [
-        c["name"] for c in inspector.get_columns("alerts")
-    ]
+    # Una BD sin la tabla stocks es nueva: create_all la crea ya con el
+    # esquema final y no hay nada que migrar.
+    fresh = not inspector.has_table("stocks")
     Base.metadata.create_all(engine)
-    if needs_v2:
-        with engine.begin() as conn:
-            conn.execute(text(
-                "INSERT INTO watchlists (id, name, created_at) VALUES (1, 'Mi lista', CURRENT_TIMESTAMP)"
-            ))
-            conn.execute(text("DROP INDEX IF EXISTS ix_stocks_ticker"))
-            conn.execute(text("ALTER TABLE stocks ADD COLUMN watchlist_id INTEGER REFERENCES watchlists(id)"))
-            conn.execute(text("UPDATE stocks SET watchlist_id = 1"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_stocks_ticker ON stocks (ticker)"))
-            conn.execute(text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS ux_stocks_ticker_list ON stocks (ticker, watchlist_id)"
-            ))
-    if needs_owner:
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE watchlists ADD COLUMN owner_id INTEGER REFERENCES bot_users(id)"))
-    if needs_chat:
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE move_notices ADD COLUMN chat_id VARCHAR(32)"))
-    if needs_prefs:
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE bot_users ADD COLUMN summary_interval INTEGER"))
-            conn.execute(text("ALTER TABLE bot_users ADD COLUMN summary_time VARCHAR(5)"))
-    if needs_members:
-        # Las asignaciones antiguas (owner) pasan a ser membresías.
-        with engine.begin() as conn:
-            conn.execute(text(
-                "INSERT INTO watchlist_members (watchlist_id, user_id) "
-                "SELECT w.id, w.owner_id FROM watchlists w "
-                "JOIN bot_users u ON u.id = w.owner_id WHERE u.role != 'admin'"
-            ))
-    if needs_can_edit:
-        with engine.begin() as conn:
-            conn.execute(text(
-                "ALTER TABLE watchlist_members ADD COLUMN can_edit BOOLEAN NOT NULL DEFAULT TRUE"
-            ))
-    if needs_position:
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE stocks ADD COLUMN quantity FLOAT"))
-            conn.execute(text("ALTER TABLE stocks ADD COLUMN buy_price FLOAT"))
-    if needs_repeat:
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE alerts ADD COLUMN repeat BOOLEAN NOT NULL DEFAULT FALSE"))
+    with session_scope() as session:
+        stored = get_setting(session, "schema_version", "")
+        if stored:
+            current = int(stored)
+        else:
+            current = SCHEMA_VERSION if fresh else _detect_legacy_version(inspector)
+        for version in sorted(_MIGRATIONS):
+            if version <= current:
+                continue
+            with engine.begin() as conn:
+                for statement in _MIGRATIONS[version]:
+                    conn.execute(text(statement))
+            log.info("Migración de esquema aplicada: v%d", version)
+        if stored != str(SCHEMA_VERSION):
+            set_setting(session, "schema_version", str(SCHEMA_VERSION))
 
 
 def ensure_admin() -> None:

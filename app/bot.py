@@ -957,152 +957,192 @@ def _parse_number(text: str) -> float | None:
         return None
 
 
+# Cada acción pendiente de respuesta de texto tiene su función
+# (ctx, text, pending); el diccionario PENDING_HANDLERS del final las
+# despacha por nombre, igual que CALLBACK_HANDLERS con los botones.
+
+
+def _pending_search(ctx, text, pending):
+    _handle_search_text(ctx, text, pending.get("list_id"))
+
+
+def _pending_new_list(ctx, text, pending):
+    # Solo la primera línea: si mandan varios renglones (p. ej. tickers),
+    # no queremos un nombre de lista multilínea.
+    name = text.strip().splitlines()[0].strip()[:60]
+    if not name:
+        _send("Necesito un nombre para la lista.", chat_id=ctx["chat"])
+        return
+    if len(text.strip().splitlines()) > 1:
+        _send(
+            f"Ojo: he usado solo «{esc(name)}» como nombre. "
+            "Los valores se añaden después desde la lista con ➕ Añadir.",
+            chat_id=ctx["chat"],
+        )
+    with SessionLocal() as session:
+        creator = session.get(BotUser, ctx["uid"])
+        _, error = services.create_list(session, name, creator)
+    if error:
+        _send(esc(error), chat_id=ctx["chat"])
+    _lists_view(ctx)
+
+
+def _pending_rename_list(ctx, text, pending):
+    name = text.strip().splitlines()[0]
+    with SessionLocal() as session:
+        wl = session.get(Watchlist, pending["list_id"])
+        if not wl or not _can_delete_list(ctx, wl):
+            _send("Esa lista ya no existe o no puedes renombrarla.", chat_id=ctx["chat"])
+            return
+        error = services.rename_list(session, wl, name)
+    if error:
+        _send(esc(error), chat_id=ctx["chat"])
+        return
+    _list_view(ctx, pending["list_id"])
+
+
+def _pending_alert_price(ctx, text, pending):
+    with SessionLocal() as session:
+        stock = _get_stock_checked(session, ctx, pending["stock_id"], edit=True)
+        if stock:
+            quote = prices.get_quote(stock.ticker)
+            value = services.parse_threshold(
+                text, pending["kind"], quote["price"] if quote else None
+            )
+            if value is None:
+                _send(
+                    "Eso no parece un umbral válido. Usa un precio (150.50) o un porcentaje (5%).",
+                    chat_id=ctx["chat"],
+                )
+                return
+            session.add(Alert(
+                stock_id=stock.id, kind=pending["kind"], threshold=value,
+                repeat=pending.get("repeat", False),
+            ))
+            session.commit()
+    _stock_view(ctx, pending["stock_id"])
+
+
+def _pending_target(ctx, text, pending):
+    with SessionLocal() as session:
+        stock = _get_stock_checked(session, ctx, pending["stock_id"], edit=True)
+        if stock:
+            if text.strip().lower() in ("quitar", "borrar", "no"):
+                stock.target_price = None
+            else:
+                value = _parse_number(text)
+                if value is None or value <= 0:
+                    _send("Eso no parece un precio válido.", chat_id=ctx["chat"])
+                    return
+                stock.target_price = value
+            session.commit()
+    _stock_view(ctx, pending["stock_id"])
+
+
+def _pending_notes(ctx, text, pending):
+    with SessionLocal() as session:
+        stock = _get_stock_checked(session, ctx, pending["stock_id"], edit=True)
+        if stock:
+            stock.notes = "" if text.strip().lower() in ("quitar", "borrar") else text.strip()
+            session.commit()
+    _stock_view(ctx, pending["stock_id"])
+
+
+def _pending_position(ctx, text, pending):
+    with SessionLocal() as session:
+        stock = _get_stock_checked(session, ctx, pending["stock_id"], edit=True)
+        if stock:
+            if text.strip().lower() in ("quitar", "borrar", "no"):
+                stock.quantity = None
+                stock.buy_price = None
+            else:
+                parts = text.split()
+                qty = _parse_number(parts[0]) if parts else None
+                buy = _parse_number(parts[1]) if len(parts) > 1 else None
+                if not qty or not buy or qty <= 0 or buy <= 0:
+                    _send("No lo entendí. Escribe cantidad y precio (ej: 10 120.50), o «quitar».", chat_id=ctx["chat"])
+                    return
+                stock.quantity = qty
+                stock.buy_price = buy
+            session.commit()
+    _stock_view(ctx, pending["stock_id"])
+
+
+def _pending_move(ctx, text, pending):
+    value = _parse_number(text)
+    if value is None or value <= 0:
+        _send("Debe ser un número positivo (ej: 5).", chat_id=ctx["chat"])
+        return
+    with SessionLocal() as session:
+        set_setting(session, "move_threshold", str(value))
+        session.commit()
+    _settings_view(ctx)
+
+
+def _pending_interval(ctx, text, pending):
+    value = _parse_number(text)
+    if value is None or not 1 <= value <= 720:
+        _send("Debe ser un número de minutos entre 1 y 720.", chat_id=ctx["chat"])
+        return
+    with SessionLocal() as session:
+        set_setting(session, "check_interval_minutes", str(int(value)))
+        session.commit()
+    scheduler.reschedule()
+    _settings_view(ctx)
+
+
+def _save_user_pref(ctx, pending, field: str, value) -> None:
+    """Guarda una preferencia de resúmenes y muestra la vista que toca.
+    target_uid: el admin puede estar editando los resúmenes de otro usuario."""
+    target_uid = pending.get("target_uid", ctx["uid"])
+    with SessionLocal() as session:
+        user = session.get(BotUser, target_uid)
+        if user:
+            setattr(user, field, value)
+            session.commit()
+    scheduler.reschedule()
+    _user_detail_view(ctx, target_uid) if target_uid != ctx["uid"] else _settings_view(ctx)
+
+
+def _pending_summary_interval(ctx, text, pending):
+    value = _parse_number(text)
+    if value is None or not 0 <= value <= 1440:
+        _send("Debe ser un número de minutos entre 0 (desactivado) y 1440.", chat_id=ctx["chat"])
+        return
+    _save_user_pref(ctx, pending, "summary_interval", int(value))
+
+
+def _pending_summary_time(ctx, text, pending):
+    normalized = normalize_time(text)
+    if not normalized:
+        _send(f"No entendí «{esc(text.strip())}». Usa el formato HH:MM (ej: 22:10).", chat_id=ctx["chat"])
+        return
+    _save_user_pref(ctx, pending, "summary_time", normalized)
+
+
+PENDING_HANDLERS = {
+    "search": _pending_search,
+    "new_list": _pending_new_list,
+    "rename_list": _pending_rename_list,
+    "alert_price": _pending_alert_price,
+    "target": _pending_target,
+    "notes": _pending_notes,
+    "position": _pending_position,
+    "move": _pending_move,
+    "interval": _pending_interval,
+    "summary_interval": _pending_summary_interval,
+    "summary_time": _pending_summary_time,
+}
+
+
 def _handle_pending(ctx: dict, text: str) -> bool:
     """Procesa la respuesta a una pregunta previa. True si había algo pendiente."""
     pending = _pending.pop(ctx["chat"], None)
     if not pending:
         return False
-    action = pending["action"]
-    chat = ctx["chat"]
-
-    if action == "search":
-        _handle_search_text(ctx, text, pending.get("list_id"))
-    elif action == "new_list":
-        # Solo la primera línea: si mandan varios renglones (p. ej. tickers),
-        # no queremos un nombre de lista multilínea.
-        name = text.strip().splitlines()[0].strip()[:60]
-        if not name:
-            _send("Necesito un nombre para la lista.", chat_id=chat)
-            return True
-        if len(text.strip().splitlines()) > 1:
-            _send(
-                f"Ojo: he usado solo «{esc(name)}» como nombre. "
-                "Los valores se añaden después desde la lista con ➕ Añadir.",
-                chat_id=chat,
-            )
-        with SessionLocal() as session:
-            creator = session.get(BotUser, ctx["uid"])
-            _, error = services.create_list(session, name, creator)
-        if error:
-            _send(esc(error), chat_id=chat)
-        _lists_view(ctx)
-    elif action == "rename_list":
-        name = text.strip().splitlines()[0]
-        with SessionLocal() as session:
-            wl = session.get(Watchlist, pending["list_id"])
-            if not wl or not _can_delete_list(ctx, wl):
-                _send("Esa lista ya no existe o no puedes renombrarla.", chat_id=chat)
-                return True
-            error = services.rename_list(session, wl, name)
-        if error:
-            _send(esc(error), chat_id=chat)
-            return True
-        _list_view(ctx, pending["list_id"])
-    elif action == "alert_price":
-        with SessionLocal() as session:
-            stock = _get_stock_checked(session, ctx, pending["stock_id"], edit=True)
-            if stock:
-                quote = prices.get_quote(stock.ticker)
-                value = services.parse_threshold(
-                    text, pending["kind"], quote["price"] if quote else None
-                )
-                if value is None:
-                    _send(
-                        "Eso no parece un umbral válido. Usa un precio (150.50) o un porcentaje (5%).",
-                        chat_id=chat,
-                    )
-                    return True
-                session.add(Alert(
-                    stock_id=stock.id, kind=pending["kind"], threshold=value,
-                    repeat=pending.get("repeat", False),
-                ))
-                session.commit()
-        _stock_view(ctx, pending["stock_id"])
-    elif action == "target":
-        with SessionLocal() as session:
-            stock = _get_stock_checked(session, ctx, pending["stock_id"], edit=True)
-            if stock:
-                if text.strip().lower() in ("quitar", "borrar", "no"):
-                    stock.target_price = None
-                else:
-                    value = _parse_number(text)
-                    if value is None or value <= 0:
-                        _send("Eso no parece un precio válido.", chat_id=chat)
-                        return True
-                    stock.target_price = value
-                session.commit()
-        _stock_view(ctx, pending["stock_id"])
-    elif action == "notes":
-        with SessionLocal() as session:
-            stock = _get_stock_checked(session, ctx, pending["stock_id"], edit=True)
-            if stock:
-                stock.notes = "" if text.strip().lower() in ("quitar", "borrar") else text.strip()
-                session.commit()
-        _stock_view(ctx, pending["stock_id"])
-    elif action == "position":
-        with SessionLocal() as session:
-            stock = _get_stock_checked(session, ctx, pending["stock_id"], edit=True)
-            if stock:
-                if text.strip().lower() in ("quitar", "borrar", "no"):
-                    stock.quantity = None
-                    stock.buy_price = None
-                else:
-                    parts = text.split()
-                    qty = _parse_number(parts[0]) if parts else None
-                    buy = _parse_number(parts[1]) if len(parts) > 1 else None
-                    if not qty or not buy or qty <= 0 or buy <= 0:
-                        _send("No lo entendí. Escribe cantidad y precio (ej: 10 120.50), o «quitar».", chat_id=chat)
-                        return True
-                    stock.quantity = qty
-                    stock.buy_price = buy
-                session.commit()
-        _stock_view(ctx, pending["stock_id"])
-    elif action == "move":
-        value = _parse_number(text)
-        if value is None or value <= 0:
-            _send("Debe ser un número positivo (ej: 5).", chat_id=chat)
-            return True
-        with SessionLocal() as session:
-            set_setting(session, "move_threshold", str(value))
-            session.commit()
-        _settings_view(ctx)
-    elif action == "interval":
-        value = _parse_number(text)
-        if value is None or not 1 <= value <= 720:
-            _send("Debe ser un número de minutos entre 1 y 720.", chat_id=chat)
-            return True
-        with SessionLocal() as session:
-            set_setting(session, "check_interval_minutes", str(int(value)))
-            session.commit()
-        scheduler.reschedule()
-        _settings_view(ctx)
-    elif action == "summary_interval":
-        value = _parse_number(text)
-        if value is None or not 0 <= value <= 1440:
-            _send("Debe ser un número de minutos entre 0 (desactivado) y 1440.", chat_id=chat)
-            return True
-        # target_uid: el admin puede estar editando los resúmenes de otro usuario.
-        target_uid = pending.get("target_uid", ctx["uid"])
-        with SessionLocal() as session:
-            user = session.get(BotUser, target_uid)
-            if user:
-                user.summary_interval = int(value)
-                session.commit()
-        scheduler.reschedule()
-        _user_detail_view(ctx, target_uid) if target_uid != ctx["uid"] else _settings_view(ctx)
-    elif action == "summary_time":
-        normalized = normalize_time(text)
-        if not normalized:
-            _send(f"No entendí «{esc(text.strip())}». Usa el formato HH:MM (ej: 22:10).", chat_id=chat)
-            return True
-        target_uid = pending.get("target_uid", ctx["uid"])
-        with SessionLocal() as session:
-            user = session.get(BotUser, target_uid)
-            if user:
-                user.summary_time = normalized
-                session.commit()
-        scheduler.reschedule()
-        _user_detail_view(ctx, target_uid) if target_uid != ctx["uid"] else _settings_view(ctx)
+    handler = PENDING_HANDLERS.get(pending["action"])
+    if handler:
+        handler(ctx, text, pending)
     return True
 
 

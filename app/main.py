@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
@@ -48,10 +49,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Watchlist", lifespan=lifespan)
 
-# Versión de la release: se expone en /health (para saber qué hay desplegado) y
-# versiona las URLs de los estáticos (?v=N) para que el navegador no use un
-# app.js/style.css viejo de su caché tras un deploy. Subirla en cada release.
-APP_VERSION = 16
+# Versión de la release: el commit desplegado (Render lo expone en
+# RENDER_GIT_COMMIT; en local vale "dev"). Se muestra en /health para saber qué
+# hay desplegado y versiona las URLs de los estáticos (?v=...) para que el
+# navegador no use un app.js/style.css viejo de su caché tras un deploy.
+# Ya no hay que acordarse de subirla a mano en cada release.
+APP_VERSION = os.getenv("RENDER_GIT_COMMIT", "dev")[:8]
 
 BASE_DIR = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
