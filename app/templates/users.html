@@ -4,14 +4,16 @@
 <a href="/" class="back">← Volver</a>
 <h1>👥 Usuarios del bot</h1>
 <p class="hint">Para invitar a alguien: pásale el enlace del bot de Telegram; cuando le escriba,
-   aparecerá aquí (y te llegará un aviso al chat) para que lo apruebes.</p>
+   aparecerá aquí (y te llegará un aviso al chat) para que lo apruebes. Desde aquí puedes ver
+   las listas de cada usuario (con sus valores) y cambiarle sus resúmenes.</p>
 
 <table class="watchlist">
   <thead>
     <tr>
       <th>Nombre</th>
       <th>Rol</th>
-      <th>Listas compartidas</th>
+      <th>Listas y valores</th>
+      <th>Resúmenes</th>
       <th></th>
     </tr>
   </thead>
@@ -24,7 +26,34 @@
         {% elif u.role == 'user' %}<span class="badge ok">Usuario</span>
         {% else %}<span class="badge warn">⏳ Pendiente</span>{% endif %}
       </td>
-      <td class="name">{{ u.lists or '—' }}</td>
+      <td class="name">
+        {% if u.role == 'admin' %}
+          <span class="muted">Todas (las gestionas desde el dashboard)</span>
+        {% elif u.lists %}
+          {% for l in u.lists %}
+            <div>
+              <a href="/?list={{ l.id }}">📋 {{ l.name }}</a>{% if not l.can_edit %} <span title="Solo lectura">👁</span>{% endif %}
+              — <span class="muted">{{ l.tickers or 'vacía' }}</span>
+            </div>
+          {% endfor %}
+        {% else %}
+          <span class="muted">—</span>
+        {% endif %}
+      </td>
+      <td>
+        {% if u.role != 'pending' %}
+        <form method="post" action="/users/{{ u.id }}/summary" class="user-summary">
+          <label>cada
+            <input type="number" name="summary_interval" value="{{ u.summary_interval }}"
+                   min="0" max="1440" title="Minutos entre resúmenes automáticos (0 = desactivado)">
+            min</label>
+          <label>diario a las
+            <input type="time" name="summary_time" value="{{ u.summary_time }}"
+                   title="Hora del resumen diario"></label>
+          <button class="small">Guardar</button>
+        </form>
+        {% endif %}
+      </td>
       <td>
         {% if u.role == 'pending' %}
           <form method="post" action="/users/{{ u.id }}/approve" style="display:inline">
@@ -45,4 +74,6 @@
     {% endfor %}
   </tbody>
 </table>
+<p class="hint">El resumen automático es cada cuántos minutos le llega el estado de sus listas
+   (0 lo desactiva); el diario le llega una vez al día a la hora indicada.</p>
 {% endblock %}

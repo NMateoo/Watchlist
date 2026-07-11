@@ -425,13 +425,47 @@ def _users_view(ctx: dict, message_id: int | None = None) -> None:
             elif u.role == "user":
                 lists = len(u.shared_lists)
                 lines.append(f"👤 {esc(u.name)} — {lists} lista{'s' if lists != 1 else ''}")
-                rows.append([_btn(f"🗑️ Quitar a {u.name[:20]}", f"udel:{u.id}")])
+                rows.append([_btn(f"⚙️ Gestionar a {u.name[:20]}", f"uv:{u.id}")])
             else:
                 lines.append(f"⏳ {esc(u.name)} (pendiente)")
                 rows.append([_btn(f"✅ Aprobar a {u.name[:16]}", f"uok:{u.id}"), _btn("❌", f"uno:{u.id}")])
     lines.append("\nPara invitar a alguien, pásale el enlace del bot y "
                  "cuando escriba te llegará su solicitud.")
     rows.append([_btn("◀️ Menú", "menu")])
+    _show(ctx, "\n".join(lines), rows, message_id)
+
+
+def _user_detail_view(ctx: dict, user_id: int, message_id: int | None = None) -> None:
+    """Ficha de un usuario (solo admin): sus listas con lo que contienen y
+    sus preferencias de resúmenes, todo editable."""
+    with SessionLocal() as session:
+        user = session.get(BotUser, user_id)
+        if not user or user.role != "user":
+            _users_view(ctx, message_id)
+            return
+        periodic, summary = get_user_summary_prefs(session, user)
+        periodic_txt = f"cada <b>{periodic} min</b>" if periodic else "<b>desactivado</b>"
+        lines = [
+            f"👤 <b>{esc(user.name)}</b>",
+            f"📊 Resumen automático: {periodic_txt}",
+            f"🕙 Resumen diario: a las <b>{summary}</b> ({config.TIMEZONE})",
+        ]
+        rows = [[
+            _btn("📊 Cambiar automático", f"uset:{user_id}:periodic"),
+            _btn("🕙 Cambiar diario", f"uset:{user_id}:summary"),
+        ]]
+        memberships = sorted(user.memberships, key=lambda m: m.watchlist_id)
+        if memberships:
+            lines.append("\n<u>Sus listas</u>")
+            for m in memberships:
+                perm = "✏️" if m.can_edit else "👁"
+                tickers = ", ".join(sorted(s.ticker for s in m.watchlist.stocks)) or "vacía"
+                lines.append(f"📋 <b>{esc(m.watchlist.name)}</b> {perm}: {esc(tickers)}")
+                rows.append([_btn(f"📋 Abrir {m.watchlist.name[:40]}", f"l:{m.watchlist_id}")])
+        else:
+            lines.append("\nNo tiene listas: compártele una desde 📋 Mis listas → 👥 Compartir.")
+    rows.append([_btn("🗑 Quitar acceso", f"udel:{user_id}")])
+    rows.append([_btn("◀️ Usuarios", "users")])
     _show(ctx, "\n".join(lines), rows, message_id)
 
 
@@ -772,6 +806,30 @@ def _cb_user_reject(ctx, args, message_id):
     _users_view(ctx, message_id)
 
 
+def _cb_user_view(ctx, args, message_id):
+    _user_detail_view(ctx, int(args[0]), message_id)
+
+
+def _cb_user_setting(ctx, args, message_id):
+    user_id, which = int(args[0]), args[1]
+    with SessionLocal() as session:
+        user = session.get(BotUser, user_id)
+        if not user or user.role != "user":
+            return
+        name = user.name
+    if which == "periodic":
+        action, prompt = "summary_interval", (
+            f"Cada cuántos minutos le mando el resumen automático a {esc(name)} "
+            "(0 para desactivarlo):"
+        )
+    else:
+        action, prompt = "summary_time", (
+            f"Hora del resumen diario de {esc(name)} en formato HH:MM (ej: 22:10):"
+        )
+    _pending[ctx["chat"]] = {"action": action, "target_uid": user_id}
+    _send(prompt, [[_btn("Cancelar", f"uv:{user_id}")]], ctx["chat"])
+
+
 def _cb_user_delete(ctx, args, message_id):
     keyboard = [[_btn("Sí, quitar acceso", f"udel2:{args[0]}"), _btn("No", "users")]]
     _edit(ctx["chat"], message_id, "¿Quitar el acceso a este usuario? Sus listas pasarán a ti.", keyboard)
@@ -858,6 +916,8 @@ CALLBACK_HANDLERS = {
     "alerts": _cb_alerts,
     "settings": _cb_settings,
     "users": _cb_users,
+    "uv": _cb_user_view,
+    "uset": _cb_user_setting,
     "uok": _cb_user_approve,
     "uno": _cb_user_reject,
     "udel": _cb_user_delete,
@@ -871,7 +931,7 @@ CALLBACK_HANDLERS = {
     "summary": _cb_summary,
 }
 
-ADMIN_ONLY_ACTIONS = {"users", "uok", "uno", "udel", "udel2", "lasg", "lasgto", "lperm"}
+ADMIN_ONLY_ACTIONS = {"users", "uv", "uset", "uok", "uno", "udel", "udel2", "lasg", "lasgto", "lperm"}
 
 
 def _handle_callback(update: dict) -> None:
@@ -1021,23 +1081,28 @@ def _handle_pending(ctx: dict, text: str) -> bool:
         if value is None or not 0 <= value <= 1440:
             _send("Debe ser un número de minutos entre 0 (desactivado) y 1440.", chat_id=chat)
             return True
+        # target_uid: el admin puede estar editando los resúmenes de otro usuario.
+        target_uid = pending.get("target_uid", ctx["uid"])
         with SessionLocal() as session:
-            user = session.get(BotUser, ctx["uid"])
-            user.summary_interval = int(value)
-            session.commit()
+            user = session.get(BotUser, target_uid)
+            if user:
+                user.summary_interval = int(value)
+                session.commit()
         scheduler.reschedule()
-        _settings_view(ctx)
+        _user_detail_view(ctx, target_uid) if target_uid != ctx["uid"] else _settings_view(ctx)
     elif action == "summary_time":
         normalized = normalize_time(text)
         if not normalized:
             _send(f"No entendí «{esc(text.strip())}». Usa el formato HH:MM (ej: 22:10).", chat_id=chat)
             return True
+        target_uid = pending.get("target_uid", ctx["uid"])
         with SessionLocal() as session:
-            user = session.get(BotUser, ctx["uid"])
-            user.summary_time = normalized
-            session.commit()
+            user = session.get(BotUser, target_uid)
+            if user:
+                user.summary_time = normalized
+                session.commit()
         scheduler.reschedule()
-        _settings_view(ctx)
+        _user_detail_view(ctx, target_uid) if target_uid != ctx["uid"] else _settings_view(ctx)
     return True
 
 

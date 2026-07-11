@@ -30,3 +30,39 @@ def test_permisos_de_lista(session):
     assert bot._can_delete_list(ctx_admin, wl)
     assert bot._can_delete_list(ctx_creador, wl)
     assert not bot._can_delete_list(ctx_lector, wl)
+
+
+def test_admin_edita_los_resumenes_de_otro_usuario(session, monkeypatch):
+    admin = BotUser(chat_id="1", name="Admin", role="admin")
+    ana = BotUser(chat_id="2", name="Ana", role="user")
+    session.add_all([admin, ana])
+    session.commit()
+    monkeypatch.setattr(bot, "_send", lambda *a, **k: {})
+    monkeypatch.setattr(bot, "_show", lambda *a, **k: None)
+    monkeypatch.setattr(bot.scheduler, "reschedule", lambda: None)
+    ctx = {"uid": admin.id, "chat": "1", "role": "admin", "name": "Admin"}
+
+    bot._pending["1"] = {"action": "summary_interval", "target_uid": ana.id}
+    bot._handle_pending(ctx, "45")
+    bot._pending["1"] = {"action": "summary_time", "target_uid": ana.id}
+    bot._handle_pending(ctx, "9:5")
+
+    session.expire_all()
+    assert session.get(BotUser, ana.id).summary_interval == 45
+    assert session.get(BotUser, ana.id).summary_time == "09:05"
+
+
+def test_sin_target_el_usuario_edita_sus_propios_resumenes(session, monkeypatch):
+    admin = BotUser(chat_id="1", name="Admin", role="admin")
+    session.add(admin)
+    session.commit()
+    monkeypatch.setattr(bot, "_send", lambda *a, **k: {})
+    monkeypatch.setattr(bot, "_show", lambda *a, **k: None)
+    monkeypatch.setattr(bot.scheduler, "reschedule", lambda: None)
+    ctx = {"uid": admin.id, "chat": "1", "role": "admin", "name": "Admin"}
+
+    bot._pending["1"] = {"action": "summary_interval"}
+    bot._handle_pending(ctx, "0")
+
+    session.expire_all()
+    assert session.get(BotUser, admin.id).summary_interval == 0

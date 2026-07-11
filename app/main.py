@@ -26,7 +26,9 @@ from app.database import (
     get_move_threshold,
     get_refresh_seconds,
     get_summary_time,
+    get_user_summary_prefs,
     init_db,
+    normalize_time,
     set_setting,
 )
 
@@ -49,7 +51,7 @@ app = FastAPI(title="Watchlist", lifespan=lifespan)
 # Versión de la release: se expone en /health (para saber qué hay desplegado) y
 # versiona las URLs de los estáticos (?v=N) para que el navegador no use un
 # app.js/style.css viejo de su caché tras un deploy. Subirla en cada release.
-APP_VERSION = 15
+APP_VERSION = 16
 
 BASE_DIR = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
@@ -215,19 +217,60 @@ def toggle_member_edit(list_id: int, user_id: int):
 def users_page(request: Request):
     with SessionLocal() as session:
         users = session.scalars(select(BotUser).order_by(BotUser.created_at)).all()
-        data = [
-            {
-                "id": u.id,
-                "name": u.name,
-                "chat_id": u.chat_id,
-                "role": u.role,
-                "lists": ", ".join(wl.name for wl in u.shared_lists),
-            }
-            for u in users
-        ]
+        data = []
+        for u in users:
+            lists = [
+                {
+                    "id": m.watchlist_id,
+                    "name": m.watchlist.name,
+                    "can_edit": m.can_edit,
+                    "tickers": ", ".join(sorted(s.ticker for s in m.watchlist.stocks)),
+                }
+                for m in sorted(u.memberships, key=lambda m: m.watchlist_id)
+            ]
+            interval, stime = (
+                get_user_summary_prefs(session, u) if u.role != "pending" else (None, None)
+            )
+            data.append(
+                {
+                    "id": u.id,
+                    "name": u.name,
+                    "chat_id": u.chat_id,
+                    "role": u.role,
+                    "lists": lists,
+                    "summary_interval": interval,
+                    "summary_time": stime,
+                }
+            )
     return templates.TemplateResponse(
         request, "users.html", {"users": data, "telegram_ok": telegram.is_configured()}
     )
+
+
+@app.post("/users/{user_id}/summary")
+def save_user_summary(
+    user_id: int, summary_interval: str = Form(...), summary_time: str = Form(...)
+):
+    """El admin edita los resúmenes de cualquier usuario (también los suyos)."""
+    try:
+        interval = int(float(summary_interval.strip().replace(",", ".")))
+        if not 0 <= interval <= 1440:
+            raise ValueError
+    except ValueError:
+        return redirect("/users", err="El resumen automático debe ser un número de minutos entre 0 y 1440.")
+    normalized = normalize_time(summary_time)
+    if not normalized:
+        return redirect("/users", err="La hora del resumen diario debe tener formato HH:MM.")
+    with SessionLocal() as session:
+        user = session.get(BotUser, user_id)
+        if not user or user.role == "pending":
+            return redirect("/users", err="Ese usuario no existe o está pendiente.")
+        user.summary_interval = interval
+        user.summary_time = normalized
+        name = user.name
+        session.commit()
+    scheduler.reschedule()
+    return redirect("/users", msg=f"Resúmenes de {name} actualizados.")
 
 
 @app.post("/users/{user_id}/approve")

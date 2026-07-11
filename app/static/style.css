@@ -105,7 +105,7 @@ h2 { font-size: 17px; margin-bottom: 12px; }
 .badge.down { background: rgba(239,68,68,.15); color: var(--down); }
 
 /* ---- formularios ---- */
-input[type="text"], textarea, select {
+input[type="text"], input[type="number"], input[type="time"], textarea, select {
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -118,6 +118,12 @@ input[type="text"], textarea, select {
 input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 label { display: block; margin-bottom: 12px; font-size: 13.5px; color: var(--muted); }
 label input, label textarea { margin-top: 4px; }
+
+/* Resúmenes por usuario (página Usuarios): formulario compacto en línea */
+.user-summary { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.user-summary label { display: inline-flex; align-items: center; gap: 5px; margin: 0; white-space: nowrap; }
+.user-summary input[type="number"] { width: 4.8em; padding: 5px 8px; }
+.user-summary input[type="time"] { width: auto; padding: 5px 8px; }
 
 button {
   background: var(--accent);
