@@ -9,6 +9,8 @@ Monitoriza tus acciones, ETFs y cripto desde una web y recibe alertas en Telegra
 - 🔔 **Alertas de precio** — te avisa cuando un valor cruza un umbral: un precio (`150.50`) o un
   % desde el precio actual (`5%`). Las alertas 🔁 se re-arman solas al re-cruzar el umbral.
 - ⚡ **Cambios bruscos** — aviso si algo se mueve más de X% en el día (una vez al día por valor).
+- 📅 **Resultados y dividendos** — aviso cuando un valor de tus listas presenta resultados o
+  cotiza ex-dividendo/paga dividendo hoy o mañana (una vez por evento).
 - 📊 **Resumen diario** — el estado de toda tu watchlist a la hora que elijas.
 - 📝 **Notas** — precio objetivo y apuntes personales por cada valor.
 - 💼 **Posición** — apunta cantidad y precio de compra y verás tu ganancia/pérdida en vivo en el

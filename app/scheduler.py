@@ -6,7 +6,7 @@ import logging
 from apscheduler.schedulers.background import BackgroundScheduler
 from sqlalchemy import select
 
-from app import alerts, config, prices
+from app import alerts, config, events, prices
 from app.database import (
     BotUser,
     Stock,
@@ -104,6 +104,13 @@ def start() -> None:
         # Re-sincronizar cada 15 min: recoge altas/bajas de usuarios o cambios de
         # preferencias hechos desde otra instancia (p. ej. la web en local).
         scheduler.add_job(_sync_user_summaries, "interval", minutes=15, id="sync_summaries")
+        # Resultados y dividendos: una pasada al día a media mañana. Si la
+        # instancia estaba dormida a esa hora, se ejecuta al despertar
+        # (hasta 6 h después); la tabla event_notices evita duplicados.
+        scheduler.add_job(
+            events.check_events, "cron", hour=10, minute=0,
+            id="check_events", coalesce=True, misfire_grace_time=6 * 3600,
+        )
     scheduler.start()
     if config.SCHEDULER_ENABLED:
         _sync_user_summaries()

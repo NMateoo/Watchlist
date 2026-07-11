@@ -187,10 +187,95 @@ def get_quote(ticker: str, max_age: int = CACHE_TTL_SECONDS) -> dict | None:
     return cached[1] if cached else None
 
 
+# ---- cotizaciones en lote (endpoint "spark" de Yahoo) ----------------------
+
+# El "spark" devuelve varios símbolos en UNA sola petición HTTP. Con la web
+# refrescando cada pocos segundos, esto divide entre N el tráfico contra
+# Yahoo (con 20 valores: de ~120 peticiones/minuto a ~6) y reduce mucho el
+# riesgo de que Yahoo limite o banee la IP (compartida en Render).
+SPARK_URL = "https://query1.finance.yahoo.com/v7/finance/spark"
+SPARK_BATCH = 40  # símbolos por petición, para no alargar la URL de más
+
+_http = httpx.Client(headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+
+
+def _parse_spark(result: dict) -> dict | None:
+    """Convierte una entrada del spark al mismo formato que _fetch_quote."""
+    try:
+        symbol = result["symbol"]
+        meta = result["response"][0]["meta"]
+    except (KeyError, IndexError, TypeError):
+        return None
+    price = meta.get("regularMarketPrice")
+    if price is None:
+        return None
+    prev = meta.get("chartPreviousClose") or meta.get("previousClose")
+    change_pct = ((price - prev) / prev * 100) if prev else 0.0
+    return {
+        "ticker": symbol,
+        "price": float(price),
+        "prev_close": float(prev) if prev else None,
+        "change_pct": round(change_pct, 2),
+        # Ojo: no pasar a mayúsculas — "GBp" son peniques (ver _fetch_quote).
+        "currency": meta.get("currency") or "USD",
+        "year_high": meta.get("fiftyTwoWeekHigh"),
+        "year_low": meta.get("fiftyTwoWeekLow"),
+        "market_state": _market_state(meta.get("currentTradingPeriod")),
+    }
+
+
+def _fetch_spark_quotes(symbols: list[str]) -> dict[str, dict]:
+    """Cotizaciones de varios símbolos en una petición por lote de 40."""
+    quotes: dict[str, dict] = {}
+    for i in range(0, len(symbols), SPARK_BATCH):
+        chunk = symbols[i : i + SPARK_BATCH]
+        try:
+            resp = _http.get(
+                SPARK_URL,
+                params={"symbols": ",".join(chunk), "range": "1d", "interval": "15m"},
+            )
+            resp.raise_for_status()
+            results = resp.json().get("spark", {}).get("result") or []
+        except Exception as exc:
+            log.warning("Lote spark de Yahoo falló (%s); se pedirá uno a uno", exc)
+            continue
+        for result in results:
+            quote = _parse_spark(result)
+            if quote:
+                quotes[quote["ticker"]] = quote
+    return quotes
+
+
+def _warm_cache_batch(tickers: list[str], max_age: int) -> None:
+    """Rellena la caché con una sola petición en lote para los tickers caducados."""
+    now = time.time()
+
+    def fresh(sym: str) -> bool:
+        cached = _cache.get(sym)
+        return bool(cached and now - cached[0] < max_age)
+
+    # Los spots se calculan a partir de su futuro: al lote va el futuro.
+    symbols = {SPOT_FUTURES[t] if is_spot(t) else t for t in tickers}
+    stale = sorted(s for s in symbols if not fresh(s))
+    if len(stale) < 2:  # con 0-1 símbolos el lote no ahorra nada
+        return
+    for sym, quote in _fetch_spark_quotes(stale).items():
+        # El spark no trae el precio de pre/after-hours: esos pocos se dejan
+        # sin cachear y get_quote los pide uno a uno (con prepost=True).
+        if quote["market_state"] not in ("pre", "post"):
+            _cache[sym] = (time.time(), quote)
+
+
 def get_quotes(tickers: list[str], max_age: int = CACHE_TTL_SECONDS) -> dict[str, dict]:
-    """Cotizaciones de varios tickers en paralelo. Devuelve {ticker: quote}."""
+    """Cotizaciones de varios tickers. Devuelve {ticker: quote}.
+
+    Primero calienta la caché con una petición en lote; lo que el lote no
+    cubra (spots, valores en pre/after-hours, fallos) se pide uno a uno en
+    paralelo, que era el comportamiento de siempre."""
     if not tickers:
         return {}
+    tickers = list(dict.fromkeys(t.upper() for t in tickers))
+    _warm_cache_batch(tickers, max_age)
     results = list(_pool.map(lambda t: get_quote(t, max_age), tickers))
     return {q["ticker"]: q for q in results if q}
 
@@ -358,3 +443,39 @@ def get_histories(tickers: list[str], period: str = "1mo") -> dict[str, list[dic
         return {}
     results = list(_pool.map(lambda t: (t, get_history(t, period)), tickers))
     return {t: data for t, data in results if data}
+
+
+# ---- eventos corporativos (resultados y dividendos) ------------------------
+
+# Caché del calendario: {ticker: (timestamp, eventos)}. El job que avisa corre
+# una vez al día, así que con refrescar cada ~20 h sobra.
+_events_cache: dict[str, tuple[float, dict]] = {}
+EVENTS_TTL_SECONDS = 20 * 3600
+
+
+def get_corporate_events(ticker: str) -> dict:
+    """Próximos eventos del valor según Yahoo:
+    {"earnings": date|None, "earnings_estimated": bool,
+     "ex_dividend": date|None, "dividend": date|None}.
+    Vacío para activos sin calendario (spot, futuros, divisas, cripto)."""
+    ticker = ticker.upper()
+    if is_spot(ticker) or "=" in ticker or re.search(r"-(USD|EUR|GBP)$", ticker):
+        return {}
+    cached = _events_cache.get(ticker)
+    if cached and time.time() - cached[0] < EVENTS_TTL_SECONDS:
+        return cached[1]
+    try:
+        calendar = yf.Ticker(ticker).calendar or {}
+    except Exception as exc:
+        log.warning("Sin calendario de eventos de %s: %s", ticker, exc)
+        return cached[1] if cached else {}
+    # "Earnings Date" puede traer dos fechas: es una horquilla estimada.
+    earnings = sorted(calendar.get("Earnings Date") or [])
+    events = {
+        "earnings": earnings[0] if earnings else None,
+        "earnings_estimated": len(earnings) > 1,
+        "ex_dividend": calendar.get("Ex-Dividend Date"),
+        "dividend": calendar.get("Dividend Date"),
+    }
+    _events_cache[ticker] = (time.time(), events)
+    return events

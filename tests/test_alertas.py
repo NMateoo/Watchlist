@@ -1,7 +1,7 @@
 """Destinatarios de alertas, re-armado de recurrentes y purga de avisos."""
 from sqlalchemy import select
 
-from app.alerts import _check_threshold_alerts, _local_today, _purge_old_notices, _recipient_chats
+from app.alerts import _check_threshold_alerts, _local_today, _purge_old_notices, recipient_chats
 from app.database import Alert, BotUser, MoveNotice, Stock, Watchlist, WatchlistMember, utcnow
 
 
@@ -14,7 +14,7 @@ def test_admin_recibe_aunque_la_lista_este_compartida(session):
     session.add_all([admin, david, wl, stock])
     session.commit()
 
-    chats = _recipient_chats(stock)
+    chats = recipient_chats(stock)
     assert None in chats  # None = chat del admin
     assert "david-chat" in chats
 
@@ -24,7 +24,7 @@ def test_lista_sin_miembros_avisa_al_admin(session):
     stock = Stock(ticker="MSFT", watchlist=wl)
     session.add_all([wl, stock])
     session.commit()
-    assert _recipient_chats(stock) == [None]
+    assert recipient_chats(stock) == [None]
 
 
 def _alerta_disparada(session, repeat: bool) -> tuple[Stock, Alert]:

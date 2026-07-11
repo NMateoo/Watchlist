@@ -49,7 +49,7 @@ app = FastAPI(title="Watchlist", lifespan=lifespan)
 # Versión de la release: se expone en /health (para saber qué hay desplegado) y
 # versiona las URLs de los estáticos (?v=N) para que el navegador no use un
 # app.js/style.css viejo de su caché tras un deploy. Subirla en cada release.
-APP_VERSION = 14
+APP_VERSION = 15
 
 BASE_DIR = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")

@@ -69,15 +69,21 @@ def _call(method: str, **payload) -> dict:
 
 
 def _send(text: str, keyboard: list | None = None, chat_id: str | None = None) -> dict:
-    payload = {
-        "chat_id": chat_id or config.TELEGRAM_CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }
-    if keyboard:
-        payload["reply_markup"] = {"inline_keyboard": keyboard}
-    return _call("sendMessage", **payload)
+    # Los textos que superan el límite de Telegram van en varios mensajes;
+    # el teclado se adjunta solo al último.
+    parts = telegram.split_message(text)
+    result: dict = {}
+    for i, part in enumerate(parts):
+        payload = {
+            "chat_id": chat_id or config.TELEGRAM_CHAT_ID,
+            "text": part,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        if keyboard and i == len(parts) - 1:
+            payload["reply_markup"] = {"inline_keyboard": keyboard}
+        result = _call("sendMessage", **payload)
+    return result
 
 
 def _edit(chat_id: str, message_id: int, text: str, keyboard: list | None = None) -> None:

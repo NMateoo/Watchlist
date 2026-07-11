@@ -157,6 +157,20 @@ class MoveNotice(Base):
     sent_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class EventNotice(Base):
+    """Registro de avisos de eventos corporativos (resultados/dividendos) ya
+    enviados: uno por ticker, tipo de evento, fecha del evento y chat."""
+
+    __tablename__ = "event_notices"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker: Mapped[str] = mapped_column(String(20), index=True)
+    kind: Mapped[str] = mapped_column(String(12))  # earnings | ex_dividend | dividend
+    day: Mapped[str] = mapped_column(String(10), index=True)  # fecha del evento YYYY-MM-DD
+    chat_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    sent_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class Setting(Base):
     __tablename__ = "settings"
 

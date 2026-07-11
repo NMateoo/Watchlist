@@ -48,7 +48,7 @@ def to_local(dt: datetime) -> datetime:
     return dt.astimezone(ZoneInfo(config.TIMEZONE))
 
 
-def _recipient_chats(stock: Stock) -> list[str | None]:
+def recipient_chats(stock: Stock) -> list[str | None]:
     """Chats de los miembros de la lista del valor, más siempre el admin (None):
     aunque comparta una lista suya, el admin sigue recibiendo sus avisos."""
     members = stock.watchlist.members if stock.watchlist else []
@@ -107,7 +107,7 @@ def _check_threshold_alerts(session, stock: Stock, quote: dict) -> None:
             f"Precio actual: <b>{fmt_price(price, quote['currency'])}</b> "
             f"({fmt_pct(quote['change_pct'])} hoy)"
         )
-        sent = any([telegram.send_message(text, chat_id=chat) for chat in _recipient_chats(stock)])
+        sent = any([telegram.send_message(text, chat_id=chat) for chat in recipient_chats(stock)])
         if sent:
             alert.active = False
             alert.triggered_at = utcnow()
@@ -118,7 +118,7 @@ def _check_big_move(session, stock: Stock, quote: dict, threshold_pct: float, to
     change = quote["change_pct"]
     if abs(change) < threshold_pct:
         return
-    for chat in _recipient_chats(stock):
+    for chat in recipient_chats(stock):
         already = session.scalar(
             select(MoveNotice).where(
                 MoveNotice.ticker == stock.ticker,
