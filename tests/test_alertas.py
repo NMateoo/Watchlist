@@ -60,6 +60,39 @@ def test_alerta_normal_no_se_rearma(session):
     assert alert.active is False
 
 
+def test_cambio_brusco_un_solo_mensaje_aunque_este_en_dos_listas(session, monkeypatch):
+    from app import alerts
+
+    david = BotUser(chat_id="david-chat", name="David", role="user")
+    wl1, wl2 = Watchlist(name="Lista A"), Watchlist(name="Lista B")
+    wl1.memberships.append(WatchlistMember(user=david))
+    wl2.memberships.append(WatchlistMember(user=david))
+    session.add_all([
+        david, wl1, wl2,
+        Stock(ticker="AAPL", watchlist=wl1),
+        Stock(ticker="AAPL", watchlist=wl2),
+    ])
+    session.commit()
+
+    enviados = []
+    monkeypatch.setattr(
+        alerts.telegram, "send_message",
+        lambda text, chat_id=None: enviados.append(chat_id) or True,
+    )
+    monkeypatch.setattr(
+        alerts.prices, "get_quotes",
+        lambda tickers, max_age=60: {"AAPL": {"price": 100.0, "currency": "USD", "change_pct": 50.0}},
+    )
+
+    alerts.check_alerts()
+    # un solo mensaje por chat (admin y David), no uno por lista
+    assert enviados == [None, "david-chat"]
+
+    enviados.clear()
+    alerts.check_alerts()  # segunda pasada del día: ya avisado, no repite
+    assert enviados == []
+
+
 def test_purga_avisos_antiguos(session):
     hoy = _local_today()
     session.add_all([

@@ -73,12 +73,22 @@ def check_alerts() -> None:
         threshold_pct = get_move_threshold(session)
         today = _local_today()
 
+        # Los umbrales son por lista (cada fila de Stock), pero el aviso de
+        # cambio brusco se agrupa por ticker: si la misma acción está en
+        # varias listas, cada chat recibe UN solo mensaje.
+        move_chats: dict[str, set[str | None]] = {}
+        names: dict[str, str] = {}
         for stock in stocks:
             quote = quotes.get(stock.ticker)
             if not quote:
                 continue
             _check_threshold_alerts(session, stock, quote)
-            _check_big_move(session, stock, quote, threshold_pct, today)
+            move_chats.setdefault(stock.ticker, set()).update(recipient_chats(stock))
+            names.setdefault(stock.ticker, stock.name)
+
+        for ticker, chats in move_chats.items():
+            ordered = sorted(chats, key=lambda c: (c is not None, c or ""))  # admin primero
+            _check_big_move(session, ticker, names[ticker], quotes[ticker], threshold_pct, today, ordered)
 
 
 def _check_threshold_alerts(session, stock: Stock, quote: dict) -> None:
@@ -114,14 +124,22 @@ def _check_threshold_alerts(session, stock: Stock, quote: dict) -> None:
             log.info("Alerta %s de %s disparada a %.2f", alert.kind, stock.ticker, price)
 
 
-def _check_big_move(session, stock: Stock, quote: dict, threshold_pct: float, today: str) -> None:
+def _check_big_move(
+    session,
+    ticker: str,
+    name: str,
+    quote: dict,
+    threshold_pct: float,
+    today: str,
+    chats: list[str | None],
+) -> None:
     change = quote["change_pct"]
     if abs(change) < threshold_pct:
         return
-    for chat in recipient_chats(stock):
+    for chat in chats:
         already = session.scalar(
             select(MoveNotice).where(
-                MoveNotice.ticker == stock.ticker,
+                MoveNotice.ticker == ticker,
                 MoveNotice.day == today,
                 MoveNotice.chat_id == chat,
             )
@@ -130,14 +148,14 @@ def _check_big_move(session, stock: Stock, quote: dict, threshold_pct: float, to
             continue
         emoji = "📈" if change > 0 else "📉"
         sent = telegram.send_message(
-            f"{emoji} <b>{stock.ticker}</b> ({esc(stock.name)})\n"
+            f"{emoji} <b>{ticker}</b> ({esc(name)})\n"
             f"Movimiento brusco hoy: <b>{fmt_pct(change)}</b>\n"
             f"Precio actual: {fmt_price(quote['price'], quote['currency'])}",
             chat_id=chat,
         )
         if sent:
-            session.add(MoveNotice(ticker=stock.ticker, day=today, chat_id=chat, pct=change))
-            log.info("Aviso de cambio brusco de %s (%.2f%%) a %s", stock.ticker, change, chat or "admin")
+            session.add(MoveNotice(ticker=ticker, day=today, chat_id=chat, pct=change))
+            log.info("Aviso de cambio brusco de %s (%.2f%%) a %s", ticker, change, chat or "admin")
 
 
 MARKET_EMOJIS = {"pre": " 🟡", "post": " 🟣", "closed": " ⚪"}
