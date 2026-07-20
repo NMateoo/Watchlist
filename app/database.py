@@ -78,6 +78,9 @@ class BotUser(Base):
     memberships: Mapped[list[WatchlistMember]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    summary_mutes: Mapped[list["SummaryMute"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
 
     @property
     def shared_lists(self) -> list["Watchlist"]:
@@ -99,10 +102,30 @@ class Watchlist(Base):
     stocks: Mapped[list["Stock"]] = relationship(
         back_populates="watchlist", cascade="all, delete-orphan"
     )
+    summary_mutes: Mapped[list["SummaryMute"]] = relationship(
+        back_populates="watchlist", cascade="all, delete-orphan"
+    )
 
     @property
     def members(self) -> list[BotUser]:
         return [m.user for m in self.memberships]
+
+
+class SummaryMute(Base):
+    """Listas que un usuario ha silenciado en SUS resúmenes (el diario y el
+    periódico). Sin fila → la lista sí entra. No afecta a las alertas."""
+
+    __tablename__ = "summary_mutes"
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("bot_users.id", ondelete="CASCADE"), primary_key=True
+    )
+    watchlist_id: Mapped[int] = mapped_column(
+        ForeignKey("watchlists.id", ondelete="CASCADE"), primary_key=True
+    )
+
+    user: Mapped[BotUser] = relationship(back_populates="summary_mutes")
+    watchlist: Mapped[Watchlist] = relationship(back_populates="summary_mutes")
 
 
 class Stock(Base):

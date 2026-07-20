@@ -201,9 +201,11 @@ def send_summary_to(chat_id: str | None) -> bool:
         else:
             watchlists = sorted(user.shared_lists, key=lambda w: w.id)
         is_admin = user is None or user.role == "admin"
+        # Listas que este usuario ha silenciado en sus resúmenes (⚙️ Ajustes).
+        muted = {m.watchlist_id for m in user.summary_mutes} if user else set()
         groups = []
         for wl in watchlists:
-            if not wl.stocks:
+            if wl.id in muted or not wl.stocks:
                 continue
             stocks = [
                 {

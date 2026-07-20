@@ -28,6 +28,7 @@ from app.database import (
     BotUser,
     SessionLocal,
     Stock,
+    SummaryMute,
     Watchlist,
     WatchlistMember,
     get_check_interval,
@@ -191,7 +192,7 @@ def _main_menu(ctx: dict, message_id: int | None = None) -> None:
     if _is_admin(ctx):
         keyboard.append([_btn("⚙️ Ajustes", "settings"), _btn("👥 Usuarios", "users")])
     else:
-        keyboard.append([_btn("⚙️ Mis resúmenes", "settings")])
+        keyboard.append([_btn("⚙️ Ajustes", "settings")])
     greeting = "" if _is_admin(ctx) else f"\nHola, {esc(ctx['name'])} 👋"
     _show(ctx, f"<b>📈 Watchlist</b>{greeting}\n¿Qué quieres hacer?", keyboard, message_id)
 
@@ -389,15 +390,18 @@ def _settings_view(ctx: dict, message_id: int | None = None) -> None:
         interval = get_check_interval(session)
         user = session.get(BotUser, ctx["uid"])
         periodic, summary = get_user_summary_prefs(session, user)
+        total_lists = len(_user_lists(session, ctx))
+        muted = len(user.summary_mutes) if user else 0
     periodic_txt = f"cada <b>{periodic} min</b>" if periodic else "<b>desactivado</b>"
     lines = ["<b>⚙️ Ajustes</b>"]
     keyboard = []
+    globals_title = "Globales (para todos)" if _is_admin(ctx) else "Globales (los fija el administrador)"
+    lines += [
+        f"\n<u>{globals_title}</u>",
+        f"⚡ Aviso de cambio brusco: <b>±{move}%</b>",
+        f"⏱ Comprobación de alertas: cada <b>{interval} min</b>",
+    ]
     if _is_admin(ctx):
-        lines += [
-            "\n<u>Globales (para todos)</u>",
-            f"⚡ Aviso de cambio brusco: <b>±{move}%</b>",
-            f"⏱ Comprobación de alertas: cada <b>{interval} min</b>",
-        ]
         keyboard += [
             [_btn("⚡ Cambiar umbral %", "set:move")],
             [_btn("⏱ Cambiar intervalo alertas", "set:interval")],
@@ -406,13 +410,36 @@ def _settings_view(ctx: dict, message_id: int | None = None) -> None:
         "\n<u>Tus resúmenes</u>",
         f"📊 Resumen automático: {periodic_txt}",
         f"🕙 Resumen diario: a las <b>{summary}</b> ({config.TIMEZONE})",
+        f"📋 Listas incluidas: <b>{total_lists - muted} de {total_lists}</b>",
     ]
     keyboard += [
         [_btn("📊 Cambiar resumen automático", "set:periodic")],
         [_btn("🕙 Cambiar hora resumen diario", "set:summary")],
+        [_btn("📋 Elegir listas del resumen", "sums")],
         [_btn("◀️ Menú", "menu")],
     ]
     _show(ctx, "\n".join(lines), keyboard, message_id)
+
+
+def _summary_lists_view(ctx: dict, message_id: int | None = None) -> None:
+    """Elegir qué listas entran en los resúmenes (diario y automático) del usuario."""
+    with SessionLocal() as session:
+        watchlists = _user_lists(session, ctx)
+        user = session.get(BotUser, ctx["uid"])
+        muted = {m.watchlist_id for m in user.summary_mutes} if user else set()
+        rows = [
+            [_btn(("🔕 " if wl.id in muted else "✅ ") + wl.name[:45], f"sumt:{wl.id}")]
+            for wl in watchlists
+        ]
+    rows.append([_btn("◀️ Ajustes", "settings")])
+    text = (
+        "📋 <b>Listas de tus resúmenes</b>\n"
+        "Toca una lista para incluirla (✅) o silenciarla (🔕). Afecta al resumen "
+        "diario y al automático; las alertas de precio no cambian."
+    )
+    if not watchlists:
+        text = "No tienes listas todavía."
+    _show(ctx, text, rows, message_id)
 
 
 def _users_view(ctx: dict, message_id: int | None = None) -> None:
@@ -888,7 +915,25 @@ def _cb_news(ctx, args, message_id):
 
 def _cb_summary(ctx, args, message_id):
     if not alerts_mod.send_summary_to(ctx["chat"]):
-        _send("Aún no tienes listas con valores.", chat_id=ctx["chat"])
+        _send("Aún no tienes listas con valores (o las has silenciado todas en ⚙️ Ajustes).", chat_id=ctx["chat"])
+
+
+def _cb_summary_lists(ctx, args, message_id):
+    _summary_lists_view(ctx, message_id)
+
+
+def _cb_summary_list_toggle(ctx, args, message_id):
+    list_id = int(args[0])
+    with SessionLocal() as session:
+        wl = session.get(Watchlist, list_id)
+        if _can_view_list(ctx, wl):
+            mute = session.get(SummaryMute, (ctx["uid"], list_id))
+            if mute:
+                session.delete(mute)
+            else:
+                session.add(SummaryMute(user_id=ctx["uid"], watchlist_id=list_id))
+            session.commit()
+    _summary_lists_view(ctx, message_id)
 
 
 CALLBACK_HANDLERS = {
@@ -929,6 +974,8 @@ CALLBACK_HANDLERS = {
     "g": _cb_chart,
     "n": _cb_news,
     "summary": _cb_summary,
+    "sums": _cb_summary_lists,
+    "sumt": _cb_summary_list_toggle,
 }
 
 ADMIN_ONLY_ACTIONS = {"users", "uv", "uset", "uok", "uno", "udel", "udel2", "lasg", "lasgto", "lperm"}

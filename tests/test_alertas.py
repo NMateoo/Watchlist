@@ -2,7 +2,16 @@
 from sqlalchemy import select
 
 from app.alerts import _check_threshold_alerts, _local_today, _purge_old_notices, recipient_chats
-from app.database import Alert, BotUser, MoveNotice, Stock, Watchlist, WatchlistMember, utcnow
+from app.database import (
+    Alert,
+    BotUser,
+    MoveNotice,
+    Stock,
+    SummaryMute,
+    Watchlist,
+    WatchlistMember,
+    utcnow,
+)
 
 
 def test_admin_recibe_aunque_la_lista_este_compartida(session):
@@ -91,6 +100,98 @@ def test_cambio_brusco_un_solo_mensaje_aunque_este_en_dos_listas(session, monkey
     enviados.clear()
     alerts.check_alerts()  # segunda pasada del día: ya avisado, no repite
     assert enviados == []
+
+
+def _mock_quotes(monkeypatch, alerts):
+    monkeypatch.setattr(
+        alerts.prices, "get_quotes",
+        lambda tickers, max_age=60: {
+            t: {"price": 10.0, "currency": "USD", "change_pct": 1.0} for t in tickers
+        },
+    )
+
+
+def test_lista_silenciada_no_sale_en_el_resumen(session, monkeypatch):
+    from app import alerts
+
+    admin = BotUser(chat_id="1", name="Admin", role="admin")
+    visible = Watchlist(name="Visible")
+    callada = Watchlist(name="Silenciada")
+    session.add_all([
+        admin, visible, callada,
+        Stock(ticker="AAPL", watchlist=visible),
+        Stock(ticker="MSFT", watchlist=callada),
+    ])
+    session.commit()
+    session.add(SummaryMute(user_id=admin.id, watchlist_id=callada.id))
+    session.commit()
+
+    mensajes = []
+    monkeypatch.setattr(
+        alerts.telegram, "send_message",
+        lambda text, chat_id=None: mensajes.append(text) or True,
+    )
+    _mock_quotes(monkeypatch, alerts)
+
+    assert alerts.send_summary_to("1") is True
+    texto = "\n".join(mensajes)
+    assert "AAPL" in texto
+    assert "MSFT" not in texto  # la lista silenciada no aparece
+
+
+def test_con_todas_las_listas_silenciadas_no_hay_resumen(session, monkeypatch):
+    from app import alerts
+
+    admin = BotUser(chat_id="1", name="Admin", role="admin")
+    wl = Watchlist(name="Única")
+    session.add_all([admin, wl, Stock(ticker="AAPL", watchlist=wl)])
+    session.commit()
+    session.add(SummaryMute(user_id=admin.id, watchlist_id=wl.id))
+    session.commit()
+
+    _mock_quotes(monkeypatch, alerts)
+    monkeypatch.setattr(alerts.telegram, "send_message", lambda *a, **k: True)
+    assert alerts.send_summary_to("1") is False
+
+
+def test_el_silencio_es_por_usuario(session, monkeypatch):
+    """David silencia una lista; el admin la sigue recibiendo."""
+    from app import alerts
+
+    admin = BotUser(chat_id="1", name="Admin", role="admin")
+    david = BotUser(chat_id="2", name="David", role="user")
+    wl = Watchlist(name="Compartida")
+    wl.memberships.append(WatchlistMember(user=david))
+    session.add_all([admin, david, wl, Stock(ticker="AAPL", watchlist=wl)])
+    session.commit()
+    session.add(SummaryMute(user_id=david.id, watchlist_id=wl.id))
+    session.commit()
+
+    _mock_quotes(monkeypatch, alerts)
+    monkeypatch.setattr(alerts.telegram, "send_message", lambda *a, **k: True)
+    assert alerts.send_summary_to("2") is False  # David: silenciada
+    assert alerts.send_summary_to("1") is True  # Admin: la sigue viendo
+
+
+def test_toggle_de_lista_en_resumen_desde_el_bot(session, monkeypatch):
+    from sqlalchemy import select as sa_select
+
+    from app import bot
+
+    admin = BotUser(chat_id="1", name="Admin", role="admin")
+    wl = Watchlist(name="Lista")
+    session.add_all([admin, wl])
+    session.commit()
+    monkeypatch.setattr(bot, "_show", lambda *a, **k: None)
+    ctx = {"uid": admin.id, "chat": "1", "role": "admin", "name": "Admin"}
+
+    bot._cb_summary_list_toggle(ctx, [str(wl.id)], None)
+    session.expire_all()
+    assert session.scalars(sa_select(SummaryMute)).one().watchlist_id == wl.id
+
+    bot._cb_summary_list_toggle(ctx, [str(wl.id)], None)
+    session.expire_all()
+    assert session.scalars(sa_select(SummaryMute)).all() == []
 
 
 def test_purga_avisos_antiguos(session):
