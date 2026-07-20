@@ -50,7 +50,7 @@ def _sync_user_summaries() -> None:
             desired.add(periodic_id)
             _ensure_job(
                 periodic_id, ("interval", interval, chat),
-                func=alerts.send_summary_to, trigger="interval", minutes=interval,
+                func=alerts.send_periodic_summary, trigger="interval", minutes=interval,
                 args=[chat], max_instances=1, coalesce=True,
             )
         hour, minute = stime.split(":")

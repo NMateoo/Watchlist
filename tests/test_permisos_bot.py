@@ -66,3 +66,35 @@ def test_sin_target_el_usuario_edita_sus_propios_resumenes(session, monkeypatch)
 
     session.expire_all()
     assert session.get(BotUser, admin.id).summary_interval == 0
+
+
+def test_weekend_quiet_activado_por_defecto_y_alternable(session, monkeypatch):
+    admin = BotUser(chat_id="1", name="Admin", role="admin")
+    session.add(admin)
+    session.commit()
+    assert admin.weekend_quiet is True  # activado por defecto
+
+    monkeypatch.setattr(bot, "_show", lambda *a, **k: None)
+    ctx = {"uid": admin.id, "chat": "1", "role": "admin", "name": "Admin"}
+
+    bot._cb_weekend_quiet_toggle(ctx, [], None)
+    session.expire_all()
+    assert session.get(BotUser, admin.id).weekend_quiet is False
+
+    bot._cb_weekend_quiet_toggle(ctx, [], None)
+    session.expire_all()
+    assert session.get(BotUser, admin.id).weekend_quiet is True
+
+
+def test_admin_puede_alternar_el_weekend_quiet_de_otro_usuario(session, monkeypatch):
+    admin = BotUser(chat_id="1", name="Admin", role="admin")
+    ana = BotUser(chat_id="2", name="Ana", role="user")
+    session.add_all([admin, ana])
+    session.commit()
+
+    monkeypatch.setattr(bot, "_show", lambda *a, **k: None)
+    ctx = {"uid": admin.id, "chat": "1", "role": "admin", "name": "Admin"}
+
+    bot._cb_user_weekend_quiet_toggle(ctx, [str(ana.id)], None)
+    session.expire_all()
+    assert session.get(BotUser, ana.id).weekend_quiet is False

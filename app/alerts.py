@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time as dtime, timedelta, timezone
 from html import escape as esc
 from zoneinfo import ZoneInfo
 
@@ -39,6 +39,23 @@ def fmt_pct(value: float) -> str:
 
 def _local_today() -> str:
     return datetime.now(ZoneInfo(config.TIMEZONE)).strftime("%Y-%m-%d")
+
+
+def _local_now() -> datetime:
+    return datetime.now(ZoneInfo(config.TIMEZONE))
+
+
+def is_weekend_quiet_hours(now: datetime) -> bool:
+    """Sábado 08:00 a lunes 04:00 (hora local): franja de silencio por
+    defecto del resumen automático (no afecta al diario ni al manual)."""
+    weekday, t = now.weekday(), now.time()  # lunes=0 ... domingo=6
+    if weekday == 5:  # sábado
+        return t >= dtime(8, 0)
+    if weekday == 6:  # domingo
+        return True
+    if weekday == 0:  # lunes
+        return t < dtime(4, 0)
+    return False
 
 
 def to_local(dt: datetime) -> datetime:
@@ -258,3 +275,15 @@ def send_summary_to(chat_id: str | None) -> bool:
     )
     log.info("Resumen a %s (%d valores en %d listas)", chat_id or "admin", total, len(groups))
     return sent
+
+
+def send_periodic_summary(chat_id: str) -> bool:
+    """Resumen AUTOMÁTICO programado por intervalo (job psum_*): a diferencia
+    del diario y del "resumen ahora" manual, respeta el silencio de fin de
+    semana de cada usuario (activado por defecto, configurable en Ajustes)."""
+    with session_scope() as session:
+        user = session.scalar(select(BotUser).where(BotUser.chat_id == str(chat_id)))
+        quiet_enabled = user.weekend_quiet if user else True
+    if quiet_enabled and is_weekend_quiet_hours(_local_now()):
+        return False
+    return send_summary_to(chat_id)

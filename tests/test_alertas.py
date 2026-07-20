@@ -1,7 +1,15 @@
 """Destinatarios de alertas, re-armado de recurrentes y purga de avisos."""
+from datetime import datetime
+
 from sqlalchemy import select
 
-from app.alerts import _check_threshold_alerts, _local_today, _purge_old_notices, recipient_chats
+from app.alerts import (
+    _check_threshold_alerts,
+    _local_today,
+    _purge_old_notices,
+    is_weekend_quiet_hours,
+    recipient_chats,
+)
 from app.database import (
     Alert,
     BotUser,
@@ -192,6 +200,73 @@ def test_toggle_de_lista_en_resumen_desde_el_bot(session, monkeypatch):
     bot._cb_summary_list_toggle(ctx, [str(wl.id)], None)
     session.expire_all()
     assert session.scalars(sa_select(SummaryMute)).all() == []
+
+
+def test_silencio_fin_de_semana_franja():
+    # viernes: nunca silencio
+    assert is_weekend_quiet_hours(datetime(2026, 7, 17, 23, 59)) is False
+    # sábado: silencio a partir de las 08:00, no antes
+    assert is_weekend_quiet_hours(datetime(2026, 7, 18, 7, 59)) is False
+    assert is_weekend_quiet_hours(datetime(2026, 7, 18, 8, 0)) is True
+    assert is_weekend_quiet_hours(datetime(2026, 7, 18, 23, 59)) is True
+    # domingo: todo el día
+    assert is_weekend_quiet_hours(datetime(2026, 7, 19, 0, 0)) is True
+    assert is_weekend_quiet_hours(datetime(2026, 7, 19, 23, 59)) is True
+    # lunes: silencio hasta las 04:00, no después
+    assert is_weekend_quiet_hours(datetime(2026, 7, 20, 3, 59)) is True
+    assert is_weekend_quiet_hours(datetime(2026, 7, 20, 4, 0)) is False
+    # martes: nunca silencio
+    assert is_weekend_quiet_hours(datetime(2026, 7, 21, 12, 0)) is False
+
+
+def test_resumen_periodico_se_silencia_en_fin_de_semana(session, monkeypatch):
+    from app import alerts
+
+    admin = BotUser(chat_id="1", name="Admin", role="admin", weekend_quiet=True)
+    wl = Watchlist(name="L")
+    session.add_all([admin, wl, Stock(ticker="AAPL", watchlist=wl)])
+    session.commit()
+
+    monkeypatch.setattr(alerts, "_local_now", lambda: datetime(2026, 7, 19, 12, 0))  # domingo
+    monkeypatch.setattr(alerts.telegram, "send_message", lambda *a, **k: True)
+
+    assert alerts.send_periodic_summary("1") is False
+
+
+def test_resumen_periodico_sin_silencio_activado_si_sale_en_findes(session, monkeypatch):
+    from app import alerts
+
+    admin = BotUser(chat_id="1", name="Admin", role="admin", weekend_quiet=False)
+    wl = Watchlist(name="L")
+    session.add_all([admin, wl, Stock(ticker="AAPL", watchlist=wl)])
+    session.commit()
+
+    monkeypatch.setattr(alerts, "_local_now", lambda: datetime(2026, 7, 19, 12, 0))  # domingo
+    monkeypatch.setattr(
+        alerts.prices, "get_quotes",
+        lambda tickers, max_age=60: {"AAPL": {"price": 10.0, "currency": "USD", "change_pct": 1.0}},
+    )
+    monkeypatch.setattr(alerts.telegram, "send_message", lambda *a, **k: True)
+
+    assert alerts.send_periodic_summary("1") is True
+
+
+def test_resumen_periodico_entre_semana_no_se_silencia(session, monkeypatch):
+    from app import alerts
+
+    admin = BotUser(chat_id="1", name="Admin", role="admin", weekend_quiet=True)
+    wl = Watchlist(name="L")
+    session.add_all([admin, wl, Stock(ticker="AAPL", watchlist=wl)])
+    session.commit()
+
+    monkeypatch.setattr(alerts, "_local_now", lambda: datetime(2026, 7, 21, 12, 0))  # martes
+    monkeypatch.setattr(
+        alerts.prices, "get_quotes",
+        lambda tickers, max_age=60: {"AAPL": {"price": 10.0, "currency": "USD", "change_pct": 1.0}},
+    )
+    monkeypatch.setattr(alerts.telegram, "send_message", lambda *a, **k: True)
+
+    assert alerts.send_periodic_summary("1") is True
 
 
 def test_purga_avisos_antiguos(session):

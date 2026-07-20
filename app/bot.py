@@ -386,22 +386,24 @@ def _alerts_view(ctx: dict, message_id: int | None = None) -> None:
 
 def _settings_view(ctx: dict, message_id: int | None = None) -> None:
     with SessionLocal() as session:
-        move = get_move_threshold(session)
-        interval = get_check_interval(session)
         user = session.get(BotUser, ctx["uid"])
         periodic, summary = get_user_summary_prefs(session, user)
         total_lists = len(_user_lists(session, ctx))
         muted = len(user.summary_mutes) if user else 0
+        weekend_quiet = user.weekend_quiet if user else True
+        if _is_admin(ctx):
+            move = get_move_threshold(session)
+            interval = get_check_interval(session)
     periodic_txt = f"cada <b>{periodic} min</b>" if periodic else "<b>desactivado</b>"
+    weekend_txt = "🌙 activado" if weekend_quiet else "desactivado"
     lines = ["<b>⚙️ Ajustes</b>"]
     keyboard = []
-    globals_title = "Globales (para todos)" if _is_admin(ctx) else "Globales (los fija el administrador)"
-    lines += [
-        f"\n<u>{globals_title}</u>",
-        f"⚡ Aviso de cambio brusco: <b>±{move}%</b>",
-        f"⏱ Comprobación de alertas: cada <b>{interval} min</b>",
-    ]
     if _is_admin(ctx):
+        lines += [
+            "\n<u>Globales (para todos)</u>",
+            f"⚡ Aviso de cambio brusco: <b>±{move}%</b>",
+            f"⏱ Comprobación de alertas: cada <b>{interval} min</b>",
+        ]
         keyboard += [
             [_btn("⚡ Cambiar umbral %", "set:move")],
             [_btn("⏱ Cambiar intervalo alertas", "set:interval")],
@@ -410,11 +412,14 @@ def _settings_view(ctx: dict, message_id: int | None = None) -> None:
         "\n<u>Tus resúmenes</u>",
         f"📊 Resumen automático: {periodic_txt}",
         f"🕙 Resumen diario: a las <b>{summary}</b> ({config.TIMEZONE})",
+        f"🌙 Silencio de fin de semana: {weekend_txt}",
+        "   (sáb 08:00 – lun 04:00, solo pausa el automático; no afecta al diario)",
         f"📋 Listas incluidas: <b>{total_lists - muted} de {total_lists}</b>",
     ]
     keyboard += [
         [_btn("📊 Cambiar resumen automático", "set:periodic")],
         [_btn("🕙 Cambiar hora resumen diario", "set:summary")],
+        [_btn(("🌙 Desactivar" if weekend_quiet else "🌙 Activar") + " silencio findes", "wq")],
         [_btn("📋 Elegir listas del resumen", "sums")],
         [_btn("◀️ Menú", "menu")],
     ]
@@ -472,15 +477,20 @@ def _user_detail_view(ctx: dict, user_id: int, message_id: int | None = None) ->
             return
         periodic, summary = get_user_summary_prefs(session, user)
         periodic_txt = f"cada <b>{periodic} min</b>" if periodic else "<b>desactivado</b>"
+        weekend_txt = "🌙 activado" if user.weekend_quiet else "desactivado"
         lines = [
             f"👤 <b>{esc(user.name)}</b>",
             f"📊 Resumen automático: {periodic_txt}",
             f"🕙 Resumen diario: a las <b>{summary}</b> ({config.TIMEZONE})",
+            f"🌙 Silencio de fin de semana: {weekend_txt}",
         ]
-        rows = [[
-            _btn("📊 Cambiar automático", f"uset:{user_id}:periodic"),
-            _btn("🕙 Cambiar diario", f"uset:{user_id}:summary"),
-        ]]
+        rows = [
+            [
+                _btn("📊 Cambiar automático", f"uset:{user_id}:periodic"),
+                _btn("🕙 Cambiar diario", f"uset:{user_id}:summary"),
+            ],
+            [_btn(("🌙 Desactivar" if user.weekend_quiet else "🌙 Activar") + " silencio findes", f"uwq:{user_id}")],
+        ]
         memberships = sorted(user.memberships, key=lambda m: m.watchlist_id)
         if memberships:
             lines.append("\n<u>Sus listas</u>")
@@ -837,6 +847,16 @@ def _cb_user_view(ctx, args, message_id):
     _user_detail_view(ctx, int(args[0]), message_id)
 
 
+def _cb_user_weekend_quiet_toggle(ctx, args, message_id):
+    user_id = int(args[0])
+    with SessionLocal() as session:
+        user = session.get(BotUser, user_id)
+        if user and user.role == "user":
+            user.weekend_quiet = not user.weekend_quiet
+            session.commit()
+    _user_detail_view(ctx, user_id, message_id)
+
+
 def _cb_user_setting(ctx, args, message_id):
     user_id, which = int(args[0]), args[1]
     with SessionLocal() as session:
@@ -918,6 +938,14 @@ def _cb_summary(ctx, args, message_id):
         _send("Aún no tienes listas con valores (o las has silenciado todas en ⚙️ Ajustes).", chat_id=ctx["chat"])
 
 
+def _cb_weekend_quiet_toggle(ctx, args, message_id):
+    with SessionLocal() as session:
+        user = session.get(BotUser, ctx["uid"])
+        user.weekend_quiet = not user.weekend_quiet
+        session.commit()
+    _settings_view(ctx, message_id)
+
+
 def _cb_summary_lists(ctx, args, message_id):
     _summary_lists_view(ctx, message_id)
 
@@ -962,6 +990,7 @@ CALLBACK_HANDLERS = {
     "settings": _cb_settings,
     "users": _cb_users,
     "uv": _cb_user_view,
+    "uwq": _cb_user_weekend_quiet_toggle,
     "uset": _cb_user_setting,
     "uok": _cb_user_approve,
     "uno": _cb_user_reject,
@@ -974,11 +1003,12 @@ CALLBACK_HANDLERS = {
     "g": _cb_chart,
     "n": _cb_news,
     "summary": _cb_summary,
+    "wq": _cb_weekend_quiet_toggle,
     "sums": _cb_summary_lists,
     "sumt": _cb_summary_list_toggle,
 }
 
-ADMIN_ONLY_ACTIONS = {"users", "uv", "uset", "uok", "uno", "udel", "udel2", "lasg", "lasgto", "lperm"}
+ADMIN_ONLY_ACTIONS = {"users", "uv", "uwq", "uset", "uok", "uno", "udel", "udel2", "lasg", "lasgto", "lperm"}
 
 
 def _handle_callback(update: dict) -> None:

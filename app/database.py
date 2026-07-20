@@ -72,6 +72,9 @@ class BotUser(Base):
     # Preferencias de resúmenes; NULL → usar el valor global de settings.
     summary_interval: Mapped[int | None] = mapped_column(nullable=True)
     summary_time: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    # Silencio de fin de semana del resumen AUTOMÁTICO (no afecta al diario ni
+    # al "resumen ahora" manual). Activado por defecto; cada usuario lo cambia.
+    weekend_quiet: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     watchlists: Mapped[list["Watchlist"]] = relationship(back_populates="owner")
@@ -243,6 +246,8 @@ _MIGRATIONS: dict[int, list[str]] = {
         "ALTER TABLE stocks ADD COLUMN buy_price FLOAT",
         "ALTER TABLE alerts ADD COLUMN repeat BOOLEAN NOT NULL DEFAULT FALSE",
     ],
+    # v8: silencio de fin de semana del resumen automático, por usuario.
+    8: ["ALTER TABLE bot_users ADD COLUMN weekend_quiet BOOLEAN NOT NULL DEFAULT TRUE"],
 }
 SCHEMA_VERSION = max(_MIGRATIONS)
 
